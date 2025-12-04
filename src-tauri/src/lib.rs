@@ -1,8 +1,7 @@
 use nostr_client::{NostrMessage, NostrState};
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::{tray::TrayIconBuilder, Emitter, Manager, Runtime, State};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+use tauri::{Emitter, Manager, Runtime, State};
 use tokio::sync::{mpsc, RwLock};
 
 mod nostr_client;
@@ -208,63 +207,23 @@ pub fn run() {
     // アプリ状態を初期化
     let app_state = AppState {
         nostr: Arc::new(NostrState::new()),
-        messages: Arc::new(RwLock::new(vec![
-            // ダミーメッセージ（開発用）
-            Message {
-                id: "1".to_string(),
-                pubkey: "dummy1".to_string(),
-                author: "Alice".to_string(),
-                content: "こんにちは！".to_string(),
-                timestamp: chrono::Utc::now().timestamp() - 5,
-                is_post: false,
-            },
-            Message {
-                id: "2".to_string(),
-                pubkey: "dummy2".to_string(),
-                author: "Bob".to_string(),
-                content: "今日も暑いね".to_string(),
-                timestamp: chrono::Utc::now().timestamp() - 4,
-                is_post: false,
-            },
-            Message {
-                id: "3".to_string(),
-                pubkey: "dummy3".to_string(),
-                author: "Carol".to_string(),
-                content: "新曲リリースしました！ https://example.com".to_string(),
-                timestamp: chrono::Utc::now().timestamp() - 3,
-                is_post: true,
-            },
-        ])),
+        messages: Arc::new(RwLock::new(vec![])),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![connect, send_message, get_messages, get_public_key, export_secret_key, import_secret_key, mute_user, unmute_user, get_muted_users, get_my_profile, update_profile, get_relays, add_relay, remove_relay])
         .setup(|app| {
-            // システムトレイ
-            let _tray = TrayIconBuilder::new()
-                .tooltip("Gilga")
-                .icon(app.default_window_icon().unwrap().clone())
-                .on_tray_icon_event(|tray, event| {
+            // トレイアイコンのクリックイベントを設定
+            if let Some(tray) = app.tray_by_id("main") {
+                tray.on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click { .. } = event {
                         let app = tray.app_handle();
                         toggle_overlay(app);
                     }
-                })
-                .build(app)?;
-
-            // グローバルショートカット Alt+Space
-            let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-            let app_handle = app.handle().clone();
-
-            app.global_shortcut()
-                .on_shortcut(shortcut, move |_app, _shortcut, _event| {
-                    toggle_overlay(&app_handle);
-                })?;
-
-            app.global_shortcut().register(shortcut)?;
+                });
+            }
 
             Ok(())
         })

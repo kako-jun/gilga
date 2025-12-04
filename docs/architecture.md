@@ -127,7 +127,7 @@ WindowBuilder::new(app, "overlay", WindowUrl::App("index.html".into()))
 
 - 黒背景、半透明
 - 画面端に常駐
-- ホットキーで表示/非表示
+- トレイアイコンで表示/非表示
 
 ## パフォーマンス目標
 

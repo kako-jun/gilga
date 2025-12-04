@@ -194,7 +194,8 @@ impl NostrState {
         self.muted.read().await.iter().cloned().collect()
     }
 
-    /// ユーザーがミュートされているか確認
+    /// ユーザーがミュートされているか確認（将来のワードミュートやUI側での確認用）
+    #[allow(dead_code)]
     pub async fn is_muted(&self, pubkey: &str) -> bool {
         self.muted.read().await.contains(pubkey)
     }
@@ -333,11 +334,14 @@ impl NostrState {
 
         // リレーに接続（設定から読み込んだリストを使用）
         let relays = self.relays.read().await.clone();
+        println!("🌐 Connecting to {} relays...", relays.len());
         for relay in &relays {
+            println!("  - {}", relay);
             let _ = client.add_relay(relay.as_str()).await;
         }
 
         client.connect().await;
+        println!("✅ Connected to relays");
 
         *self.keys.write().await = Some(keys);
         *self.client.write().await = Some(client);
@@ -355,6 +359,7 @@ impl NostrState {
             .kinds(vec![Kind::ChannelMessage, Kind::TextNote, Kind::Metadata])
             .limit(100);
 
+        println!("🔔 Subscribing to events (kind:1, kind:42, kind:0)...");
         client.subscribe(filter, None).await?;
 
         Ok(())
@@ -416,6 +421,8 @@ impl NostrState {
                                 timestamp: event.created_at.as_u64() as i64,
                                 is_post,
                             };
+
+                            println!("📨 Received event: {} from {}", msg.content, msg.author);
 
                             if let Some(tx) = sender.read().await.as_ref() {
                                 let _ = tx.send(msg);
