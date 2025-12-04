@@ -15,6 +15,7 @@ pub struct Message {
     content: String,
     timestamp: i64,
     is_post: bool,
+    context: Option<String>,
 }
 
 /// アプリケーション状態

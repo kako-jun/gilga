@@ -11,6 +11,7 @@ interface Message {
   content: string;
   timestamp: number;
   is_post: boolean;
+  context?: string;
 }
 
 // タイムスタンプをフォーマット
@@ -138,6 +139,7 @@ function App() {
         content,
         timestamp: Math.floor(Date.now() / 1000),
         is_post: false,
+        context: undefined,
       };
       setMessages((prev) => [...prev, newMessage]);
     } catch (e) {
@@ -200,6 +202,7 @@ function App() {
             onContextMenu={(e) => handleContextMenu(e, msg.pubkey, msg.author)}
           >
             <span className="time">{formatTime(msg.timestamp)}</span>
+            {msg.context && <span className="context-label">{msg.context}</span>}
             {msg.is_post && <span className="post-label">[投稿]</span>}
             <span className="author">{msg.author}:</span>
             <span className="content">{linkify(msg.content)}</span>

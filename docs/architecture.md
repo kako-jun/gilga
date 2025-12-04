@@ -147,14 +147,14 @@ WindowBuilder::new(app, "overlay", WindowUrl::App("index.html".into()))
 | NIP-19 | bech32エンコード（npub/nsec） | 実装済み |
 | NIP-28 | パブリックチャット（kind:42） | 実装済み |
 
-**Zapは実装しない。** おねだりUIはGilgaの思想に反する。
+**Zapは実装しない。** おねだりUIはgilgaの思想に反する。
 
 ## 互換性
 
 他のNostrクライアントと完全互換。
 
-- Gilgaで投稿 → Damus/Amethystで見える
-- 0xchatのチャンネル → Gilgaで見える
+- gilgaで投稿 → Damus/Amethystで見える
+- 0xchatのチャンネル → gilgaで見える
 - 独自拡張なし
 
 ただし「Nostrと互換」とは言わない。

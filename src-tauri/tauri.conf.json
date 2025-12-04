@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Gilga",
+  "productName": "gilga",
   "version": "0.1.0",
   "identifier": "com.gilga.app",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Gilga",
+        "title": "gilga",
         "width": 400,
         "height": 600,
         "decorations": true,
@@ -26,7 +26,7 @@
     "trayIcon": {
       "id": "main",
       "iconPath": "icons/icon.ico",
-      "tooltip": "Gilga"
+      "tooltip": "gilga"
     },
     "security": {
       "csp": null

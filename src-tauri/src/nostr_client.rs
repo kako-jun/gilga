@@ -23,6 +23,7 @@ pub struct NostrMessage {
     pub content: String,
     pub timestamp: i64,
     pub is_post: bool,
+    pub context: Option<String>, // チャンネル名やリプライ先など
 }
 
 /// プロフィール情報
@@ -251,6 +252,37 @@ impl NostrState {
         false
     }
 
+    /// コンテキスト情報を抽出（チャンネルID、リプライ先など）
+    fn extract_context(event: &Event) -> Option<String> {
+        // kind:42（チャンネルメッセージ）の場合、eタグの最初がチャンネルID
+        if event.kind == Kind::ChannelMessage {
+            for tag in event.tags.iter() {
+                let tag_vec = tag.clone().to_vec();
+                if tag_vec.len() >= 2 && tag_vec[0] == "e" {
+                    // チャンネルIDの最後の8文字を表示
+                    let channel_id = &tag_vec[1];
+                    if channel_id.len() > 8 {
+                        return Some(format!("#{}", &channel_id[channel_id.len()-8..]));
+                    } else {
+                        return Some(format!("#{}", channel_id));
+                    }
+                }
+            }
+        }
+
+        // kind:1（テキスト投稿）の場合、eタグがあればリプライ
+        if event.kind == Kind::TextNote {
+            for tag in event.tags.iter() {
+                let tag_vec = tag.clone().to_vec();
+                if tag_vec.len() >= 2 && tag_vec[0] == "e" {
+                    return Some("↩️返信".to_string());
+                }
+            }
+        }
+
+        None
+    }
+
     /// pubkeyから表示名を取得（短縮形式）
     fn format_author(pubkey: &PublicKey, profiles: &HashMap<String, Profile>) -> String {
         let hex = pubkey.to_hex();
@@ -354,13 +386,19 @@ impl NostrState {
         let client_guard = self.client.read().await;
         let client = client_guard.as_ref().ok_or("Client not initialized")?;
 
-        // 全チャンネルのメッセージ + 全テキスト投稿 + プロフィール
-        let filter = Filter::new()
-            .kinds(vec![Kind::ChannelMessage, Kind::TextNote, Kind::Metadata])
-            .limit(100);
+        // メッセージは起動時刻以降のみ
+        let messages_filter = Filter::new()
+            .kinds(vec![Kind::ChannelMessage, Kind::TextNote])
+            .since(Timestamp::now());
 
-        println!("🔔 Subscribing to events (kind:1, kind:42, kind:0)...");
-        client.subscribe(filter, None).await?;
+        // プロフィールは過去のものも取得（表示名のため）
+        let profiles_filter = Filter::new()
+            .kind(Kind::Metadata)
+            .limit(200);
+
+        println!("🔔 Subscribing to new messages and recent profiles...");
+        client.subscribe(messages_filter, None).await?;
+        client.subscribe(profiles_filter, None).await?;
 
         Ok(())
     }
@@ -413,6 +451,9 @@ impl NostrState {
                             let author = Self::format_author(&event.pubkey, &profiles_guard);
                             drop(profiles_guard);
 
+                            // コンテキスト情報を取得（チャンネルID、リプライ先など）
+                            let context = Self::extract_context(&event);
+
                             let msg = NostrMessage {
                                 id: event.id.to_hex(),
                                 pubkey: event.pubkey.to_hex(),
@@ -420,9 +461,14 @@ impl NostrState {
                                 content: event.content.clone(),
                                 timestamp: event.created_at.as_u64() as i64,
                                 is_post,
+                                context: context.clone(),
                             };
 
-                            println!("📨 Received event: {} from {}", msg.content, msg.author);
+                            if let Some(ctx) = &context {
+                                println!("📨 Received event: {} from {} [{}]", msg.content, msg.author, ctx);
+                            } else {
+                                println!("📨 Received event: {} from {}", msg.content, msg.author);
+                            }
 
                             if let Some(tx) = sender.read().await.as_ref() {
                                 let _ = tx.send(msg);

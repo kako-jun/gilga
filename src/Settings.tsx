@@ -280,7 +280,7 @@ export default function Settings({ onClose }: SettingsProps) {
 
           <section>
             <h3>バージョン</h3>
-            <p>Gilga v0.1.0</p>
+            <p>gilga v0.1.0</p>
           </section>
         </div>
       </div>

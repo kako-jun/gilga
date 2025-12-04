@@ -119,6 +119,14 @@
   font-size: 12px;
 }
 
+/* コンテキストラベル（チャンネル、リプライなど） */
+.context-label {
+  color: #66bb6a;
+  margin-right: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 /* 発言者名 */
 .author {
   color: #4a9eff;
