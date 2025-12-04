@@ -1,0 +1,127 @@
+/* オーバーレイ全体 */
+.overlay {
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  color: #fff;
+  overflow: hidden;
+}
+
+/* メッセージエリア */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* スクロールバー */
+.messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+/* 個別メッセージ */
+.message {
+  line-height: 1.5;
+  animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 投稿ラベル */
+.post-label {
+  color: #888;
+  margin-right: 6px;
+  font-size: 12px;
+}
+
+/* 発言者名 */
+.author {
+  color: #4a9eff;
+  margin-right: 6px;
+  font-weight: 500;
+}
+
+/* 自分の発言 */
+.message.mine .author {
+  color: #ffd700;
+}
+
+/* メッセージ内容 */
+.content {
+  color: #fff;
+  word-break: break-word;
+}
+
+/* 入力エリア */
+.input-area {
+  padding: 8px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.input-area input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+}
+
+.input-area input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.input-area input:focus {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* リンク */
+a, .content a {
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+a:hover, .content a:hover {
+  text-decoration: underline;
+}
+
+/* 全体リセット */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
