@@ -68,6 +68,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; pubkey: string; author: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isConnectedRef = useRef(false);
 
   // メッセージ追加（重複除去）
   const addMessage = useCallback((msg: Message) => {
@@ -88,6 +89,10 @@ function App() {
     let unlisten: UnlistenFn | null = null;
 
     const init = async () => {
+      // 重複実行を防ぐ（React StrictMode対策）
+      if (isConnectedRef.current) return;
+      isConnectedRef.current = true;
+
       try {
         // イベントリスナー登録
         unlisten = await listen<Message>("nostr-message", (event) => {
@@ -104,6 +109,7 @@ function App() {
       } catch (e) {
         console.error("Connection error:", e);
         setStatus("error");
+        isConnectedRef.current = false;
       }
     };
     init();

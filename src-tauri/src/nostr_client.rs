@@ -369,11 +369,17 @@ impl NostrState {
         println!("🌐 Connecting to {} relays...", relays.len());
         for relay in &relays {
             println!("  - {}", relay);
-            let _ = client.add_relay(relay.as_str()).await;
+            match client.add_relay(relay.as_str()).await {
+                Ok(_) => println!("    ✓ Added"),
+                Err(e) => println!("    ✗ Failed to add: {}", e),
+            }
         }
 
         client.connect().await;
-        println!("✅ Connected to relays");
+
+        // 接続されたリレーを確認
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        println!("✅ Connected to relays (waiting 2s for connection to stabilize)");
 
         *self.keys.write().await = Some(keys);
         *self.client.write().await = Some(client);
@@ -386,19 +392,24 @@ impl NostrState {
         let client_guard = self.client.read().await;
         let client = client_guard.as_ref().ok_or("Client not initialized")?;
 
-        // メッセージは起動時刻以降のみ
+        // メッセージは過去1時間から取得
+        let one_hour_ago = Timestamp::now().as_u64() - 3600; // 1時間前
         let messages_filter = Filter::new()
             .kinds(vec![Kind::ChannelMessage, Kind::TextNote])
-            .since(Timestamp::now());
+            .since(Timestamp::from(one_hour_ago))
+            .limit(50); // 最大50件に制限
 
         // プロフィールは過去のものも取得（表示名のため）
         let profiles_filter = Filter::new()
             .kind(Kind::Metadata)
-            .limit(200);
+            .limit(100); // 減らす
 
-        println!("🔔 Subscribing to new messages and recent profiles...");
+        println!("🔔 Subscribing to messages (last 1 hour, max 50) and profiles (max 100)...");
+        println!("   Filter: since={}, kinds=[1,42]", one_hour_ago);
         client.subscribe(messages_filter, None).await?;
+        println!("   ✓ Messages filter subscribed");
         client.subscribe(profiles_filter, None).await?;
+        println!("   ✓ Profiles filter subscribed");
 
         Ok(())
     }
@@ -411,6 +422,7 @@ impl NostrState {
         let muted = self.muted.clone();
 
         tokio::spawn(async move {
+            println!("🎧 Event listener started");
             client
                 .handle_notifications(|notification| {
                     let sender = sender.clone();
@@ -418,6 +430,7 @@ impl NostrState {
                     let muted = muted.clone();
                     async move {
                         if let RelayPoolNotification::Event { event, .. } = notification {
+                            println!("📬 Event received: kind={}", event.kind.as_u16());
                             // ミュートされたユーザーをスキップ
                             let pubkey_hex = event.pubkey.to_hex();
                             if muted.read().await.contains(&pubkey_hex) {
@@ -426,6 +439,7 @@ impl NostrState {
 
                             // プロフィール（kind:0）の処理
                             if event.kind == Kind::Metadata {
+                                println!("👤 Profile received for {}", &pubkey_hex[..8]);
                                 if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&event.content) {
                                     let profile = Profile {
                                         name: metadata.get("name").and_then(|v| v.as_str()).map(String::from),
@@ -443,6 +457,7 @@ impl NostrState {
                             // メッセージ（kind:1, kind:42）の処理
                             // スパムフィルタ
                             if Self::is_spam(&event.content) {
+                                println!("🚫 Spam filtered: {}", &event.content[..50.min(event.content.len())]);
                                 return Ok(false);
                             }
 
@@ -473,6 +488,8 @@ impl NostrState {
                             if let Some(tx) = sender.read().await.as_ref() {
                                 let _ = tx.send(msg);
                             }
+                        } else {
+                            println!("🔔 Non-event notification received");
                         }
                         Ok(false) // 継続
                     }
