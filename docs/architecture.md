@@ -60,62 +60,58 @@ let filter2 = Filter::new()
 gilga/
 ├── src-tauri/              # Rustバックエンド
 │   ├── src/
-│   │   ├── main.rs
-│   │   ├── nostr/          # Nostr関連（ユーザーには見えない）
-│   │   │   ├── client.rs   # 接続管理
-│   │   │   ├── stream.rs   # 統合ストリーム
-│   │   │   └── keys.rs     # 鍵管理（自動生成）
-│   │   └── overlay/        # オーバーレイ制御
+│   │   ├── main.rs         # エントリーポイント
+│   │   ├── lib.rs          # Tauriコマンド定義
+│   │   └── nostr_client.rs # Nostrクライアント全機能
 │   └── Cargo.toml
 ├── src/                    # Reactフロント
-│   ├── App.tsx
-│   ├── components/
-│   │   ├── Stream/         # 統合ストリーム表示
-│   │   ├── Overlay/        # オーバーレイUI
-│   │   └── Input/          # 投稿UI
-│   └── hooks/
-│       └── useStream.ts    # ストリーム購読
+│   ├── App.tsx             # メインUI（ストリーム表示）
+│   ├── App.css
+│   ├── Settings.tsx        # 設定画面
+│   ├── Settings.css
+│   └── main.tsx
 ├── docs/                   # ドキュメント
 └── CLAUDE.md
 ```
 
-## 鍵管理（ユーザーに見せない）
+## 鍵管理
 
 ```
 初回起動
     │
     ├─ 鍵ペアを自動生成
     │
-    ├─ OSのキーチェーンに保存
+    ├─ ~/.gilga/keys.json に保存（ローカルファイル）
     │
     └─ 即座に使える状態に
 ```
 
-- 「秘密鍵」「公開鍵」という言葉を出さない
-- 「ログイン」という概念を出さない
-- ただ「開いたら使える」
+### 実装済み機能
 
-上級者向けにNIP-07拡張連携は用意するが、設定の奥に隠す。
+- 鍵の自動生成・永続化
+- 秘密鍵のエクスポート（nsec形式）
+- 秘密鍵のインポート（既存Nostrユーザー向け）
+
+### ユーザー向けUI
+
+設定画面で「鍵の管理」セクションとして提供。
+ただし技術用語は最小限に抑える。
 
 ## リレー管理
 
-### プリセットリレー
+### デフォルトリレー
 
 ```
-# グローバル
 wss://relay.damus.io
 wss://nos.lol
-wss://relay.nostr.band
-wss://nostr.wine
-
-# 日本語圏
 wss://relay-jp.nostr.wirednet.jp
-wss://nostr.holybea.com
-wss://nostr-relay.nokotaro.com
 ```
 
-ユーザーにはリレーという概念を見せない。
-「設定」→「詳細設定」→「接続先」のような深い階層に隠す。
+### 実装済み機能
+
+- リレーの追加・削除
+- ~/.gilga/relays.json に永続化
+- 設定画面で「接続先リレー」として管理
 
 ## オーバーレイ実装
 
@@ -144,13 +140,14 @@ WindowBuilder::new(app, "overlay", WindowUrl::App("index.html".into()))
 
 ## NIP対応（開発者向け）
 
-| NIP | 用途 | ユーザーに見せるか |
-|-----|------|-------------------|
-| NIP-01 | 基本イベント | 見せない |
-| NIP-07 | 拡張連携 | 設定の奥に隠す |
-| NIP-28 | パブリックチャット | 見せない（チャットとして見せる） |
+| NIP | 用途 | 実装状況 |
+|-----|------|---------|
+| NIP-01 | 基本イベント（kind:1 テキスト投稿） | 実装済み |
+| NIP-01 | kind:0 メタデータ（プロフィール） | 実装済み |
+| NIP-19 | bech32エンコード（npub/nsec） | 実装済み |
+| NIP-28 | パブリックチャット（kind:42） | 実装済み |
 
-**Zapは実装しない。** 投げ銭乞食UIはGilgaの思想に反する。
+**Zapは実装しない。** おねだりUIはGilgaの思想に反する。
 
 ## 互換性
 

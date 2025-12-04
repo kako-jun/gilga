@@ -1,9 +1,28 @@
-use tauri::{
-    tray::TrayIconBuilder, Manager, Runtime,
-};
+use nostr_client::{NostrMessage, NostrState};
+use serde::Serialize;
+use std::sync::Arc;
+use tauri::{tray::TrayIconBuilder, Emitter, Manager, Runtime, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+use tokio::sync::{mpsc, RwLock};
 
 mod nostr_client;
+
+/// フロントエンドに返すメッセージ
+#[derive(Clone, Serialize)]
+pub struct Message {
+    id: String,
+    pubkey: String,
+    author: String,
+    content: String,
+    timestamp: i64,
+    is_post: bool,
+}
+
+/// アプリケーション状態
+pub struct AppState {
+    nostr: Arc<NostrState>,
+    messages: Arc<RwLock<Vec<Message>>>,
+}
 
 /// オーバーレイの表示/非表示を切り替え
 fn toggle_overlay<R: Runtime>(app: &tauri::AppHandle<R>) {
@@ -17,11 +36,212 @@ fn toggle_overlay<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+/// Nostrに接続
+#[tauri::command]
+async fn connect(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    state
+        .nostr
+        .init()
+        .await
+        .map_err(|e| format!("接続エラー: {}", e))?;
+
+    state
+        .nostr
+        .subscribe()
+        .await
+        .map_err(|e| format!("購読エラー: {}", e))?;
+
+    // イベント受信用チャンネルを設定
+    let (tx, mut rx) = mpsc::unbounded_channel::<NostrMessage>();
+    state.nostr.set_event_sender(tx).await;
+
+    // イベントリスニング開始
+    state
+        .nostr
+        .start_listening()
+        .await
+        .map_err(|e| format!("リスニングエラー: {}", e))?;
+
+    // フロントエンドへのイベント転送タスク
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let _ = app_handle.emit("nostr-message", msg);
+        }
+    });
+
+    // 公開鍵を返す（デバッグ用）
+    let pubkey = state.nostr.get_public_key().await.unwrap_or_default();
+    Ok(pubkey)
+}
+
+/// メッセージを送信
+#[tauri::command]
+async fn send_message(content: String, state: State<'_, AppState>) -> Result<String, String> {
+    let event_id = state
+        .nostr
+        .send_message(&content)
+        .await
+        .map_err(|e| format!("送信エラー: {}", e))?;
+
+    Ok(event_id.to_hex())
+}
+
+/// メッセージ一覧を取得（現状はダミー）
+#[tauri::command]
+async fn get_messages(state: State<'_, AppState>) -> Result<Vec<Message>, String> {
+    let messages = state.messages.read().await;
+    Ok(messages.clone())
+}
+
+/// 公開鍵を取得
+#[tauri::command]
+async fn get_public_key(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .nostr
+        .get_public_key()
+        .await
+        .ok_or_else(|| "公開鍵が見つかりません".to_string())
+}
+
+/// 秘密鍵を取得（エクスポート用）
+#[tauri::command]
+async fn export_secret_key(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .nostr
+        .get_secret_key()
+        .await
+        .ok_or_else(|| "秘密鍵が見つかりません".to_string())
+}
+
+/// 秘密鍵をインポート
+#[tauri::command]
+async fn import_secret_key(key: String, state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .nostr
+        .import_key(&key)
+        .await
+        .map_err(|e| format!("インポートエラー: {}", e))
+}
+
+/// ユーザーをミュート
+#[tauri::command]
+async fn mute_user(pubkey: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .nostr
+        .mute_user(&pubkey)
+        .await
+        .map_err(|e| format!("ミュートエラー: {}", e))
+}
+
+/// ユーザーのミュートを解除
+#[tauri::command]
+async fn unmute_user(pubkey: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .nostr
+        .unmute_user(&pubkey)
+        .await
+        .map_err(|e| format!("ミュート解除エラー: {}", e))
+}
+
+/// ミュートリストを取得
+#[tauri::command]
+async fn get_muted_users(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.nostr.get_muted_users().await)
+}
+
+/// 自分のプロフィールを取得
+#[tauri::command]
+async fn get_my_profile(state: State<'_, AppState>) -> Result<Option<nostr_client::Profile>, String> {
+    Ok(state.nostr.get_my_profile().await)
+}
+
+/// プロフィールを更新
+#[tauri::command]
+async fn update_profile(
+    name: Option<String>,
+    display_name: Option<String>,
+    about: Option<String>,
+    picture: Option<String>,
+    website: Option<String>,
+    nip05: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .nostr
+        .update_profile(name, display_name, about, picture, website, nip05)
+        .await
+        .map_err(|e| format!("プロフィール更新エラー: {}", e))
+}
+
+/// リレーリストを取得
+#[tauri::command]
+async fn get_relays(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.nostr.get_relays().await)
+}
+
+/// リレーを追加
+#[tauri::command]
+async fn add_relay(url: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .nostr
+        .add_relay(&url)
+        .await
+        .map_err(|e| format!("リレー追加エラー: {}", e))
+}
+
+/// リレーを削除
+#[tauri::command]
+async fn remove_relay(url: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .nostr
+        .remove_relay(&url)
+        .await
+        .map_err(|e| format!("リレー削除エラー: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // アプリ状態を初期化
+    let app_state = AppState {
+        nostr: Arc::new(NostrState::new()),
+        messages: Arc::new(RwLock::new(vec![
+            // ダミーメッセージ（開発用）
+            Message {
+                id: "1".to_string(),
+                pubkey: "dummy1".to_string(),
+                author: "Alice".to_string(),
+                content: "こんにちは！".to_string(),
+                timestamp: chrono::Utc::now().timestamp() - 5,
+                is_post: false,
+            },
+            Message {
+                id: "2".to_string(),
+                pubkey: "dummy2".to_string(),
+                author: "Bob".to_string(),
+                content: "今日も暑いね".to_string(),
+                timestamp: chrono::Utc::now().timestamp() - 4,
+                is_post: false,
+            },
+            Message {
+                id: "3".to_string(),
+                pubkey: "dummy3".to_string(),
+                author: "Carol".to_string(),
+                content: "新曲リリースしました！ https://example.com".to_string(),
+                timestamp: chrono::Utc::now().timestamp() - 3,
+                is_post: true,
+            },
+        ])),
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(app_state)
+        .invoke_handler(tauri::generate_handler![connect, send_message, get_messages, get_public_key, export_secret_key, import_secret_key, mute_user, unmute_user, get_muted_users, get_my_profile, update_profile, get_relays, add_relay, remove_relay])
         .setup(|app| {
             // システムトレイ
             let _tray = TrayIconBuilder::new()
@@ -39,9 +259,10 @@ pub fn run() {
             let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
             let app_handle = app.handle().clone();
 
-            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, _event| {
-                toggle_overlay(&app_handle);
-            })?;
+            app.global_shortcut()
+                .on_shortcut(shortcut, move |_app, _shortcut, _event| {
+                    toggle_overlay(&app_handle);
+                })?;
 
             app.global_shortcut().register(shortcut)?;
 
