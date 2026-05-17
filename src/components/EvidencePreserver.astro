@@ -62,13 +62,18 @@ const copy =
         statusModified: '内容が変わっています',
         statusMissing: 'ZIP 内に見つかりません',
         statusUnknown: 'manifest に無いファイルです',
+        statusUnverifiedChain:
+          '上流欠落のため chain 検証不能（内容ハッシュは一致）',
         rootHashMismatch: 'チェーン再計算と manifest の root hash が一致しません',
         // エラー
+        noFilesToCreate:
+          '画像ファイルが追加されていません。先に画像を選んでください。',
         notImage: '画像ファイルを選んでください。',
         notZip: '.zip ファイルを選んでください。',
         zipReadFail: 'ZIP を読み込めませんでした。壊れている可能性があります。',
         manifestMissing: 'ZIP 内に manifest.json が見つかりません。',
         manifestParseFail: 'manifest.json の形式が壊れています。',
+        manifestEmpty: 'manifest.json にファイル情報が 1 件もありません。',
         unsupported:
           'このブラウザは File API / SubtleCrypto に対応していません。最新のブラウザでお試しください。',
         // 将来枠
@@ -113,13 +118,18 @@ const copy =
         statusModified: 'Content has changed',
         statusMissing: 'Missing from the ZIP',
         statusUnknown: 'Not listed in the manifest',
+        statusUnverifiedChain:
+          'Chain not verifiable (upstream missing); content hash matches',
         rootHashMismatch:
           'Recomputed chain does not match the manifest root hash',
+        noFilesToCreate:
+          'No image files added. Please pick some images first.',
         notImage: 'Please choose image files.',
         notZip: 'Please choose a .zip file.',
         zipReadFail: 'Could not read the ZIP. It may be corrupt.',
         manifestMissing: 'manifest.json is missing from the ZIP.',
         manifestParseFail: 'manifest.json is malformed.',
+        manifestEmpty: 'manifest.json contains no file entries.',
         unsupported:
           'Your browser does not support File API / SubtleCrypto. Please try a modern browser.',
         futureHeading: 'Future work (not implemented)',
@@ -191,6 +201,7 @@ const copy =
     <p
       class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
       data-create-error
+      role="alert"
     >
     </p>
 
@@ -218,6 +229,8 @@ const copy =
       <p
         class="hidden mt-4 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-md px-4 py-2"
         data-create-success
+        role="status"
+        aria-live="polite"
       >
       </p>
     </div>
@@ -238,6 +251,7 @@ const copy =
     <p
       class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
       data-verify-error
+      role="alert"
     >
     </p>
 
@@ -246,7 +260,7 @@ const copy =
     </p>
 
     <div class="hidden mt-6" data-verify-result>
-      <div data-verify-summary></div>
+      <div data-verify-summary role="status" aria-live="polite"></div>
 
       <div class="mt-5 border border-gray-700 rounded-md px-4 py-3 bg-gray-900/40 text-xs text-gray-300 space-y-1">
         <div>
@@ -283,6 +297,11 @@ const copy =
     size: number;
     sha256: string;
     chain: string;
+    /**
+     * 元のファイル名（sanitize 済み）。表示用途のみ。検証で改ざん検出に使わない。
+     * SVG 等の active content / 制御文字を除去し、255 文字に丸める。
+     */
+    originalName?: string;
   };
 
   type Manifest = {
@@ -346,6 +365,20 @@ const copy =
 
   /** 空文字列の SHA-256（チェーン初期値） */
   const emptyHash = async (): Promise<string> => sha256OfString('');
+
+  /**
+   * 元ファイル名のサニタイズ（表示用）。
+   * - 制御文字 (\x00-\x1f, \x7f) を除去
+   * - SVG/HTML タグ風の山括弧を除去（manifest 表示が active content にならないように）
+   * - 長さは 255 文字までで打ち切り
+   */
+  const sanitizeOriginalName = (orig: string): string => {
+    const stripped = orig
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .replace(/[<>]/g, '');
+    return stripped.length > 255 ? stripped.slice(0, 255) : stripped;
+  };
 
   /** ファイル名サニタイズ。日付プレフィックス + index + 元拡張子 */
   const safeName = (orig: string, index: number): string => {
@@ -559,15 +592,22 @@ const copy =
     });
 
     if (createDropZone) {
+      createDropZone.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
       createDropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         createDropZone.classList.add('border-purple-300');
       });
-      createDropZone.addEventListener('dragleave', () => {
+      createDropZone.addEventListener('dragleave', (e) => {
+        e.stopPropagation();
         createDropZone.classList.remove('border-purple-300');
       });
       createDropZone.addEventListener('drop', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         createDropZone.classList.remove('border-purple-300');
         const dt = e.dataTransfer;
         if (dt && dt.files && dt.files.length > 0) {
@@ -586,10 +626,14 @@ const copy =
     });
 
     const runCreate = async (): Promise<void> => {
-      if (!createBtn || entries.length === 0) return;
+      if (!createBtn) return;
       clearCreateError();
+      // 空 manifest ガード: ファイルが 1 件もなければ作成しない
+      if (entries.length === 0) {
+        showCreateError(copy.noFilesToCreate);
+        return;
+      }
       createBtn.disabled = true;
-      const originalLabel = createBtn.textContent ?? copy.createBtn;
       createBtn.textContent = copy.creating;
 
       try {
@@ -602,18 +646,21 @@ const copy =
 
         for (let i = 0; i < entries.length; i++) {
           const entry = entries[i];
+          // SHA-256 計算用には ArrayBuffer が必要だが、ZIP には File をそのまま渡し、
+          // JSZip にバッファ全件メモリ保持を強制しないようにする（メモリ効率改善）。
           const buf = await entry.file.arrayBuffer();
           const fileSha = await sha256OfBuffer(buf);
           const chain = await chainStep(prevChain, fileSha);
           prevChain = chain;
 
           const name = safeName(entry.file.name, i);
-          imagesFolder.file(name, buf);
+          imagesFolder.file(name, entry.file);
           manifestFiles.push({
             name,
             size: entry.file.size,
             sha256: fileSha,
             chain,
+            originalName: sanitizeOriginalName(entry.file.name),
           });
         }
 
@@ -645,7 +692,8 @@ const copy =
       } catch {
         showCreateError(copy.zipReadFail);
       } finally {
-        createBtn.textContent = originalLabel;
+        // ラベル復元は常に固定コピー値で（途中で書き換えられても復帰できる）
+        createBtn.textContent = copy.createBtn;
         createBtn.disabled = false;
       }
     };
@@ -713,6 +761,8 @@ const copy =
       ) {
         return null;
       }
+      // 空 manifest ガード: files は必ず 1 件以上
+      if (m.files.length < 1) return null;
       const files: ManifestFile[] = [];
       for (const f of m.files) {
         if (!f || typeof f !== 'object') return null;
@@ -730,6 +780,10 @@ const copy =
           size: fo.size,
           sha256: fo.sha256,
           chain: fo.chain,
+          originalName:
+            typeof fo.originalName === 'string'
+              ? sanitizeOriginalName(fo.originalName)
+              : undefined,
         });
       }
       return {
@@ -741,7 +795,12 @@ const copy =
       };
     };
 
-    type VerifyRowStatus = 'ok' | 'modified' | 'missing' | 'unknown';
+    type VerifyRowStatus =
+      | 'ok'
+      | 'modified'
+      | 'missing'
+      | 'unknown'
+      | 'unverified-chain';
 
     const renderSummary = (
       kind: 'ok' | 'ng' | 'warn',
@@ -796,7 +855,9 @@ const copy =
             ? copy.statusModified
             : status === 'missing'
               ? copy.statusMissing
-              : copy.statusUnknown;
+              : status === 'unverified-chain'
+                ? copy.statusUnverifiedChain
+                : copy.statusUnknown;
       s.textContent = tag;
       head.appendChild(n);
       head.appendChild(s);
@@ -849,6 +910,17 @@ const copy =
           showVerifyError(copy.manifestParseFail);
           return;
         }
+        // 空 manifest を専用メッセージで弾く（validateManifest は null を返すだけで理由が分からない）
+        if (
+          manifestRaw &&
+          typeof manifestRaw === 'object' &&
+          Array.isArray((manifestRaw as Record<string, unknown>).files) &&
+          ((manifestRaw as Record<string, unknown>).files as unknown[])
+            .length === 0
+        ) {
+          showVerifyError(copy.manifestEmpty);
+          return;
+        }
         const manifest = validateManifest(manifestRaw);
         if (!manifest) {
           showVerifyError(copy.manifestParseFail);
@@ -865,6 +937,8 @@ const copy =
         let prevChain = await emptyHash();
         let allOk = true;
         let anyMissingOrUnknown = false;
+        // 上流が欠落・改ざんで chain が崩れたら立てる。以降は chain 検証を skip。
+        let chainBroken = false;
         const rows: HTMLElement[] = [];
 
         // ZIP 内の images/* の存在を別途確認（manifest に無いファイルの検出用）
@@ -877,17 +951,41 @@ const copy =
         });
 
         for (const mf of manifest.files) {
+          // 表示には sanitize 済 originalName を優先（fallback で内部 name）
+          const displayLabel = mf.originalName
+            ? `${mf.name} (${mf.originalName})`
+            : mf.name;
           const inZip = zip.file(`images/${mf.name}`);
           if (!inZip) {
             allOk = false;
             anyMissingOrUnknown = true;
-            rows.push(renderVerifyRow(mf.name, 'missing', ''));
-            // チェーンも崩れるので prevChain は更新しない（後続はずれる）
+            rows.push(renderVerifyRow(displayLabel, 'missing', ''));
+            // 以降は chain が必ずずれるので chain 検証を停止する
+            chainBroken = true;
             continue;
           }
           imagesInZip.delete(mf.name);
           const fileBuf = await inZip.async('arraybuffer');
           const sha = await sha256OfBuffer(fileBuf);
+
+          if (chainBroken) {
+            // chain は検証できない。内容ハッシュだけ突き合わせる。
+            let status: VerifyRowStatus;
+            let detail: string;
+            if (sha === mf.sha256) {
+              status = 'unverified-chain';
+              detail = `sha256: ${sha.slice(0, 16)}… (chain skipped)`;
+              anyMissingOrUnknown = true;
+              allOk = false;
+            } else {
+              status = 'modified';
+              detail = `sha256: ${sha.slice(0, 16)}… ≠ ${mf.sha256.slice(0, 16)}…`;
+              allOk = false;
+            }
+            rows.push(renderVerifyRow(displayLabel, status, detail));
+            continue;
+          }
+
           const expectedChain = await chainStep(prevChain, sha);
 
           let status: VerifyRowStatus = 'ok';
@@ -895,17 +993,19 @@ const copy =
           if (sha !== mf.sha256) {
             status = 'modified';
             allOk = false;
+            chainBroken = true;
             detail = `sha256: ${sha.slice(0, 16)}… ≠ ${mf.sha256.slice(0, 16)}…`;
           } else if (expectedChain !== mf.chain) {
             status = 'modified';
             allOk = false;
+            chainBroken = true;
             detail = `chain: recomputed ${expectedChain.slice(0, 16)}… ≠ ${mf.chain.slice(0, 16)}…`;
           } else {
             detail = `sha256: ${sha.slice(0, 16)}…`;
           }
 
           prevChain = mf.chain; // 後続検証のため manifest 上の chain を使う
-          rows.push(renderVerifyRow(mf.name, status, detail));
+          rows.push(renderVerifyRow(displayLabel, status, detail));
         }
 
         // manifest に無い余分なファイル
@@ -959,15 +1059,22 @@ const copy =
       }
     });
     if (verifyDropZone) {
+      verifyDropZone.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
       verifyDropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         verifyDropZone.classList.add('border-emerald-300');
       });
-      verifyDropZone.addEventListener('dragleave', () => {
+      verifyDropZone.addEventListener('dragleave', (e) => {
+        e.stopPropagation();
         verifyDropZone.classList.remove('border-emerald-300');
       });
       verifyDropZone.addEventListener('drop', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         verifyDropZone.classList.remove('border-emerald-300');
         const dt = e.dataTransfer;
         if (dt && dt.files && dt.files.length > 0) {
