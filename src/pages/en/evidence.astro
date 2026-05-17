@@ -1,0 +1,113 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import EvidencePreserver from '@/components/EvidencePreserver.astro';
+---
+
+<Layout
+  title="Evidence Preserver — Gilga"
+  description="Lock screenshots of LINE / chat / SNS bullying into a tamper-evident hash chain. The ZIP can be re-verified later to prove nothing was added, removed, reordered, or edited. Runs fully in your browser."
+  lang="en"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/en/" class="flex items-center gap-2 group" aria-label="Gilga home">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="en" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-12 pb-12">
+    <nav class="text-xs text-gray-500 mb-6">
+      <a href="/en/" class="hover:text-purple-300">Home</a>
+      <span class="mx-2">/</span>
+      <span class="text-gray-400">Evidence Preserver</span>
+    </nav>
+
+    <section class="text-center mb-12">
+      <div class="text-5xl mb-4" aria-hidden="true">🛡️</div>
+      <h1
+        class="text-3xl sm:text-4xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        Evidence Preserver
+      </h1>
+      <p class="text-base text-gray-300 max-w-2xl mx-auto">
+        Lock screenshots of chat / SNS bullying into a
+        <strong class="text-red-400">tamper-evident hash chain</strong>.
+        Hand the resulting ZIP to a trusted adult, school, or counselor and prove
+        that the screenshots are in their original order, with their original
+        contents.
+      </p>
+      <p class="text-sm text-gray-500 mt-3 max-w-2xl mx-auto">
+        Images are never uploaded. Everything runs inside your browser.
+      </p>
+    </section>
+
+    <EvidencePreserver lang="en" />
+
+    <section class="mt-16 max-w-2xl mx-auto text-sm text-gray-400 space-y-4">
+      <h2 class="text-base font-semibold text-purple-300">How it works</h2>
+      <ol class="list-decimal list-inside space-y-2 text-gray-400">
+        <li>
+          Each image is hashed with <code class="text-purple-300">SHA-256</code>.
+        </li>
+        <li>
+          A <strong class="text-purple-300">hash chain</strong> is built:
+          <code class="text-purple-300">chain[i] = SHA256(chain[i-1] || file_hash[i])</code>.
+          Reordering a single file breaks every chain entry after it.
+        </li>
+        <li>
+          The final chain value becomes the <code class="text-purple-300">rootHash</code>
+          stored in <code class="text-purple-300">manifest.json</code> along with
+          the ISO8601 creation time.
+        </li>
+        <li>
+          The images and <code class="text-purple-300">manifest.json</code> are
+          packed into a ZIP named
+          <code class="text-purple-300">gilga-evidence-YYYYMMDD-HHmmss.zip</code>.
+        </li>
+        <li>
+          Drop the ZIP into Verify mode to recompute every SHA-256 and chain step
+          and compare against the manifest. Any tampering is flagged in red.
+        </li>
+      </ol>
+
+      <h2 class="text-base font-semibold text-purple-300 pt-4">
+        What it can / cannot prove
+      </h2>
+      <ul class="space-y-2">
+        <li class="text-emerald-300">
+          ✅ Detects <strong>content tampering</strong> (a single byte change fails the check)
+        </li>
+        <li class="text-emerald-300">
+          ✅ Detects <strong>reordering</strong> of the screenshots
+        </li>
+        <li class="text-emerald-300">
+          ✅ Detects <strong>added or removed</strong> files
+        </li>
+        <li class="text-amber-300">
+          ⚠️ The timestamp is <strong>your own PC clock</strong> (self-signed).
+          It cannot disprove "you faked the time"
+        </li>
+        <li class="text-amber-300">
+          ⚠️ For court-admissible evidence you need a third-party timestamp
+          authority (TSA) or OpenTimestamps
+        </li>
+      </ul>
+
+      <p class="text-xs text-gray-500 pt-2">
+        The primary use case is to explain a situation to
+        <strong>a trusted adult, teacher, or counselor</strong> with
+        "these happened in this order; I did not edit them." For formal legal
+        action, please consult a lawyer, a notary, or the police.
+      </p>
+    </section>
+  </main>
+
+  <Footer lang="en" />
+</Layout>
