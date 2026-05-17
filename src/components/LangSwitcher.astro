@@ -1,0 +1,45 @@
+---
+/**
+ * LangSwitcher — JA / EN 切り替え。
+ * 現在のロケールを受け取り、対のロケールのトップへリンクする。
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const links: Array<{ code: 'ja' | 'en'; label: string; href: string }> = [
+  { code: 'ja', label: 'JA', href: '/ja/' },
+  { code: 'en', label: 'EN', href: '/en/' },
+];
+---
+
+<nav
+  class="flex items-center gap-1 text-sm font-mono"
+  aria-label={lang === 'ja' ? '言語切り替え' : 'Language switcher'}
+>
+  {
+    links.map((link, i) => (
+      <>
+        {i > 0 && <span class="text-gray-600" aria-hidden="true">/</span>}
+        {link.code === lang ? (
+          <span
+            class="px-2 py-1 text-purple-400 font-semibold"
+            aria-current="true"
+          >
+            {link.label}
+          </span>
+        ) : (
+          <a
+            href={link.href}
+            class="px-2 py-1 text-gray-400 hover:text-purple-300 transition-colors"
+            hreflang={link.code}
+          >
+            {link.label}
+          </a>
+        )}
+      </>
+    ))
+  }
+</nav>

@@ -1,0 +1,71 @@
+---
+/**
+ * ToolCard — ツール 1 枠分のカード。
+ *
+ * - href が null のときは準備中扱いで <div> として描画（リンクなし、aria-disabled）
+ * - hover 時に紫の発光ボーダー + 微拡大
+ */
+interface Props {
+  icon: string;
+  title: string;
+  description: string;
+  href: string | null;
+  comingSoonLabel?: string;
+}
+
+const { icon, title, description, href, comingSoonLabel } = Astro.props;
+const isReady = href !== null;
+
+const baseClasses = [
+  'group relative block h-full p-6 rounded-xl',
+  'bg-gray-900/60 backdrop-blur-sm',
+  'border border-gray-800',
+  'transition-all duration-200 ease-out',
+].join(' ');
+
+const readyClasses = [
+  'hover:border-purple-500',
+  'hover:shadow-[0_0_24px_rgba(168,85,247,0.35)]',
+  'hover:scale-[1.03]',
+  'focus-visible:outline-none focus-visible:border-purple-400',
+  'focus-visible:shadow-[0_0_24px_rgba(168,85,247,0.5)]',
+].join(' ');
+
+const comingSoonClasses = 'opacity-60 cursor-not-allowed';
+---
+
+{
+  isReady ? (
+    <a
+      href={href!}
+      class={`${baseClasses} ${readyClasses}`}
+      aria-label={title}
+    >
+      <div class="text-4xl mb-3" aria-hidden="true">
+        {icon}
+      </div>
+      <h3 class="text-lg font-semibold text-white mb-2 group-hover:text-purple-300 transition-colors">
+        {title}
+      </h3>
+      <p class="text-sm text-gray-400 leading-relaxed">{description}</p>
+    </a>
+  ) : (
+    <div
+      class={`${baseClasses} ${comingSoonClasses}`}
+      aria-disabled="true"
+      role="group"
+      aria-label={title}
+    >
+      <div class="text-4xl mb-3" aria-hidden="true">
+        {icon}
+      </div>
+      <h3 class="text-lg font-semibold text-gray-300 mb-2">{title}</h3>
+      <p class="text-sm text-gray-500 leading-relaxed">{description}</p>
+      {comingSoonLabel && (
+        <span class="absolute top-3 right-3 text-[10px] uppercase tracking-wider text-purple-400/70 border border-purple-400/40 rounded px-1.5 py-0.5">
+          {comingSoonLabel}
+        </span>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,43 @@
+---
+/**
+ * Footer — 共通フッター。
+ * 「UGCなし・サーバーに送らない設計」を必ず明示する（ブランドの信頼の根）。
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const copy =
+  lang === 'ja'
+    ? {
+        principle: 'UGCなし・サーバーに送らない設計',
+        principleDetail:
+          'あなたの写真・URL・メールは、原則ブラウザの中だけで処理されます。',
+        author: 'kako-jun',
+      }
+    : {
+        principle: 'No UGC. Nothing sent to a server.',
+        principleDetail:
+          'Your photos, URLs and emails are processed inside your browser whenever possible.',
+        author: 'kako-jun',
+      };
+
+const year = new Date().getFullYear();
+---
+
+<footer class="border-t border-gray-800 mt-24">
+  <div class="max-w-5xl mx-auto px-6 py-10 text-sm text-gray-400">
+    <div class="flex items-start gap-3 mb-4">
+      <span class="text-purple-400 text-lg leading-none" aria-hidden="true">🛡️</span>
+      <div>
+        <p class="text-purple-300 font-semibold">{copy.principle}</p>
+        <p class="text-gray-500 text-xs mt-1">{copy.principleDetail}</p>
+      </div>
+    </div>
+    <p class="text-xs text-gray-600">
+      © {year} Gilga · built by {copy.author}
+    </p>
+  </div>
+</footer>
