@@ -1,0 +1,1098 @@
+---
+/**
+ * EvidencePreserver — クライアント完結の証拠保全ツール。
+ *
+ * - 「作成」モード: 画像複数を順序付きでハッシュチェーン化、ZIP（images/ + manifest.json）でダウンロード
+ * - 「検証」モード: 作成済み ZIP をドロップ、再計算と manifest を突き合わせて改ざんを検出
+ * - 暗号学的な要素は SHA-256（SubtleCrypto）と manifest のチェーン:
+ *     chain[0]   = SHA256(empty_sha256 || file_sha256[0])
+ *     chain[i]   = SHA256(chain[i-1]   || file_sha256[i])
+ *     rootHash   = chain[N-1]
+ *   → 任意の 1 バイト変更で chain と rootHash が壊れる
+ * - タイムスタンプはブラウザの Date.now()（ISO8601）。自己署名レベルで、第三者証明にはならない
+ * - 外部通信は一切なし。fetch / XHR / sendBeacon / Network API ゼロ
+ *
+ * 「これは法的証拠ではない」を画面で明示する。
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const copy =
+  lang === 'ja'
+    ? {
+        clientOnly:
+          'サーバーに送りません。すべてあなたのブラウザの中だけで動きます。',
+        notLegalHeading: '⚠️ これは法的に有効な証拠ではありません',
+        notLegalBody:
+          '裁判で「証拠」として認められるには、第三者機関のタイムスタンプ（時刻認証局 / TSA）が必要です。このツールは「あなた自身がいつ何を保存したか」を後から第三者に説明するための材料です。順序の入れ替えや内容の改ざんは検知できますが、「作成日時そのもの」は自己署名（あなたの PC の時計）に過ぎません。',
+        tabCreate: '証拠を作成',
+        tabVerify: '証拠を検証',
+        // 作成モード
+        createDropHint: 'スクショ画像をここにドロップ（複数可）',
+        createOrChoose: 'またはファイルを選ぶ',
+        createOrderHint:
+          '上から順にチェーンを作ります。順序が時系列になるよう並べてください。',
+        filesAdded: '{N} 件追加されています',
+        clearAll: 'すべてクリア',
+        moveUp: '上へ',
+        moveDown: '下へ',
+        remove: '削除',
+        createBtn: '証拠 ZIP を作成',
+        creating: '作成中…',
+        downloadHint:
+          'ダウンロードできました。ファイル名は変えても OK ですが、中身の編集はしないでください（壊れたら検証 NG になります）。',
+        // 検証モード
+        verifyDropHint: '作成済みの ZIP をここにドロップ',
+        verifyOrChoose: 'またはファイルを選ぶ',
+        verifying: '検証中…',
+        verifyOk: '改ざんなし',
+        verifyOkBody:
+          'すべてのファイルが manifest と一致し、チェーンも root hash も整合しています。',
+        verifyNg: '改ざんを検出しました',
+        verifyWarn: '一部に不整合があります',
+        rootHashLabel: 'root hash',
+        manifestLabel: 'manifest',
+        createdAtLabel: '作成日時',
+        fileCountLabel: 'ファイル数',
+        // ファイル状態
+        statusOk: 'OK',
+        statusModified: '内容が変わっています',
+        statusMissing: 'ZIP 内に見つかりません',
+        statusUnknown: 'manifest に無いファイルです',
+        statusUnverifiedChain:
+          '上流欠落のため chain 検証不能（内容ハッシュは一致）',
+        rootHashMismatch: 'チェーン再計算と manifest の root hash が一致しません',
+        // エラー
+        noFilesToCreate:
+          '画像ファイルが追加されていません。先に画像を選んでください。',
+        notImage: '画像ファイルを選んでください。',
+        notZip: '.zip ファイルを選んでください。',
+        zipReadFail: 'ZIP を読み込めませんでした。壊れている可能性があります。',
+        manifestMissing: 'ZIP 内に manifest.json が見つかりません。',
+        manifestParseFail: 'manifest.json の形式が壊れています。',
+        manifestEmpty: 'manifest.json にファイル情報が 1 件もありません。',
+        unsupported:
+          'このブラウザは File API / SubtleCrypto に対応していません。最新のブラウザでお試しください。',
+        // 将来枠
+        futureHeading: '将来の拡張（未実装）',
+        futureBody:
+          'OpenTimestamps 等、第三者機関タイムスタンプとの連携は今後の検討事項です。本ツールは完全オフラインで動く前提を崩しません。',
+      }
+    : {
+        clientOnly:
+          'We never send anything. Everything runs inside your browser.',
+        notLegalHeading: '⚠️ This is NOT legally admissible evidence',
+        notLegalBody:
+          'For court-admissible evidence you need a third-party timestamp (a Time Stamping Authority). This tool helps you explain to a third party what you saved and in what order. Reordering and content tampering are detectable, but the "created at" time itself is self-signed (your PC clock).',
+        tabCreate: 'Create',
+        tabVerify: 'Verify',
+        createDropHint: 'Drop screenshot images here (multiple allowed)',
+        createOrChoose: 'or choose files',
+        createOrderHint:
+          'Files are chained top to bottom. Arrange them to match the real timeline.',
+        filesAdded: '{N} file(s) added',
+        clearAll: 'Clear all',
+        moveUp: 'Up',
+        moveDown: 'Down',
+        remove: 'Remove',
+        createBtn: 'Create evidence ZIP',
+        creating: 'Creating…',
+        downloadHint:
+          'Downloaded. You may rename the file, but do not edit its contents (any change will fail verification).',
+        verifyDropHint: 'Drop a previously created ZIP here',
+        verifyOrChoose: 'or choose a file',
+        verifying: 'Verifying…',
+        verifyOk: 'No tampering detected',
+        verifyOkBody:
+          'All files match the manifest. The chain and root hash are consistent.',
+        verifyNg: 'Tampering detected',
+        verifyWarn: 'Some inconsistencies found',
+        rootHashLabel: 'root hash',
+        manifestLabel: 'manifest',
+        createdAtLabel: 'Created at',
+        fileCountLabel: 'File count',
+        statusOk: 'OK',
+        statusModified: 'Content has changed',
+        statusMissing: 'Missing from the ZIP',
+        statusUnknown: 'Not listed in the manifest',
+        statusUnverifiedChain:
+          'Chain not verifiable (upstream missing); content hash matches',
+        rootHashMismatch:
+          'Recomputed chain does not match the manifest root hash',
+        noFilesToCreate:
+          'No image files added. Please pick some images first.',
+        notImage: 'Please choose image files.',
+        notZip: 'Please choose a .zip file.',
+        zipReadFail: 'Could not read the ZIP. It may be corrupt.',
+        manifestMissing: 'manifest.json is missing from the ZIP.',
+        manifestParseFail: 'manifest.json is malformed.',
+        manifestEmpty: 'manifest.json contains no file entries.',
+        unsupported:
+          'Your browser does not support File API / SubtleCrypto. Please try a modern browser.',
+        futureHeading: 'Future work (not implemented)',
+        futureBody:
+          'Integration with third-party timestamps (e.g. OpenTimestamps) is under consideration. We will not break the fully offline guarantee.',
+      };
+---
+
+<section
+  class="w-full max-w-3xl mx-auto"
+  data-evidence-preserver
+  data-copy={JSON.stringify(copy)}
+>
+  <p
+    class="text-sm text-purple-300 border border-purple-500/40 bg-purple-500/10 rounded-md px-4 py-3 mb-4 flex items-start gap-2"
+  >
+    <span aria-hidden="true">🛡️</span>
+    <span>{copy.clientOnly}</span>
+  </p>
+
+  <div
+    class="text-sm text-amber-200 border border-amber-500/40 bg-amber-500/10 rounded-md px-4 py-3 mb-6"
+  >
+    <p class="font-semibold mb-1">{copy.notLegalHeading}</p>
+    <p class="text-xs text-amber-100/80">{copy.notLegalBody}</p>
+  </div>
+
+  <div role="tablist" class="flex border border-gray-700 rounded-lg overflow-hidden mb-6">
+    <button
+      type="button"
+      role="tab"
+      aria-selected="true"
+      data-tab-btn="create"
+      class="flex-1 px-4 py-2 text-sm font-semibold bg-purple-600 text-white transition-colors"
+    >
+      {copy.tabCreate}
+    </button>
+    <button
+      type="button"
+      role="tab"
+      aria-selected="false"
+      data-tab-btn="verify"
+      class="flex-1 px-4 py-2 text-sm font-semibold bg-gray-900/40 text-gray-300 hover:bg-gray-800 transition-colors"
+    >
+      {copy.tabVerify}
+    </button>
+  </div>
+
+  <!-- ============================ 作成モード ============================ -->
+  <div data-tab-panel="create">
+    <label
+      data-create-drop-zone
+      class="block border-2 border-dashed border-purple-400/60 hover:border-purple-300 transition-colors rounded-xl bg-gray-900/40 p-8 text-center cursor-pointer focus-within:border-purple-300"
+    >
+      <input
+        type="file"
+        accept="image/*"
+        multiple
+        class="sr-only"
+        data-create-file-input
+      />
+      <div class="text-4xl mb-3" aria-hidden="true">📷</div>
+      <p class="text-base text-white mb-1">{copy.createDropHint}</p>
+      <p class="text-sm text-gray-400">{copy.createOrChoose}</p>
+    </label>
+
+    <p class="text-xs text-gray-500 mt-3">{copy.createOrderHint}</p>
+
+    <p
+      class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
+      data-create-error
+      role="alert"
+    >
+    </p>
+
+    <div class="hidden mt-6" data-create-files-section>
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-xs uppercase tracking-wider text-gray-500" data-create-count></p>
+        <button
+          type="button"
+          data-create-clear
+          class="text-xs text-gray-400 hover:text-red-300 transition-colors"
+        >
+          {copy.clearAll}
+        </button>
+      </div>
+      <ul class="space-y-2" data-create-list></ul>
+
+      <button
+        type="button"
+        data-create-btn
+        class="mt-6 w-full md:w-auto px-5 py-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {copy.createBtn}
+      </button>
+
+      <p
+        class="hidden mt-4 text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-md px-4 py-2"
+        data-create-success
+        role="status"
+        aria-live="polite"
+      >
+      </p>
+    </div>
+  </div>
+
+  <!-- ============================ 検証モード ============================ -->
+  <div class="hidden" data-tab-panel="verify">
+    <label
+      data-verify-drop-zone
+      class="block border-2 border-dashed border-emerald-400/60 hover:border-emerald-300 transition-colors rounded-xl bg-gray-900/40 p-8 text-center cursor-pointer focus-within:border-emerald-300"
+    >
+      <input type="file" accept=".zip,application/zip" class="sr-only" data-verify-file-input />
+      <div class="text-4xl mb-3" aria-hidden="true">🔍</div>
+      <p class="text-base text-white mb-1">{copy.verifyDropHint}</p>
+      <p class="text-sm text-gray-400">{copy.verifyOrChoose}</p>
+    </label>
+
+    <p
+      class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
+      data-verify-error
+      role="alert"
+    >
+    </p>
+
+    <p class="hidden mt-4 text-sm text-gray-400" data-verify-progress>
+      {copy.verifying}
+    </p>
+
+    <div class="hidden mt-6" data-verify-result>
+      <div data-verify-summary role="status" aria-live="polite"></div>
+
+      <div class="mt-5 border border-gray-700 rounded-md px-4 py-3 bg-gray-900/40 text-xs text-gray-300 space-y-1">
+        <div>
+          <span class="text-gray-500">{copy.createdAtLabel}: </span>
+          <span data-verify-created class="font-mono"></span>
+        </div>
+        <div>
+          <span class="text-gray-500">{copy.fileCountLabel}: </span>
+          <span data-verify-count class="font-mono"></span>
+        </div>
+        <div class="break-all">
+          <span class="text-gray-500">{copy.rootHashLabel}: </span>
+          <span data-verify-root class="font-mono"></span>
+        </div>
+      </div>
+
+      <ul class="mt-5 space-y-2" data-verify-list></ul>
+    </div>
+  </div>
+
+  <section class="mt-12 text-sm text-gray-400">
+    <h2 class="text-base font-semibold text-purple-300 mb-2">{copy.futureHeading}</h2>
+    <p class="text-xs text-gray-500">{copy.futureBody}</p>
+  </section>
+</section>
+
+<script>
+  import JSZip from 'jszip';
+
+  type Copy = Record<string, string>;
+
+  type ManifestFile = {
+    name: string;
+    size: number;
+    sha256: string;
+    chain: string;
+    /**
+     * 元のファイル名（sanitize 済み）。表示用途のみ。検証で改ざん検出に使わない。
+     * SVG 等の active content / 制御文字を除去し、255 文字に丸める。
+     */
+    originalName?: string;
+  };
+
+  type Manifest = {
+    version: string;
+    createdAt: string;
+    tool: string;
+    files: ManifestFile[];
+    rootHash: string;
+  };
+
+  type FileEntry = {
+    file: File;
+    id: number;
+  };
+
+  /** Uint8Array → hex 文字列 */
+  const bytesToHex = (bytes: Uint8Array): string => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) {
+      s += bytes[i].toString(16).padStart(2, '0');
+    }
+    return s;
+  };
+
+  /** hex 文字列 → Uint8Array */
+  const hexToBytes = (hex: string): Uint8Array => {
+    const clean = hex.length % 2 === 0 ? hex : '0' + hex;
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) {
+      out[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  };
+
+  /** ArrayBuffer の SHA-256 hex */
+  const sha256OfBuffer = async (buf: ArrayBuffer): Promise<string> => {
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return bytesToHex(new Uint8Array(digest));
+  };
+
+  /** 文字列の SHA-256 hex */
+  const sha256OfString = async (s: string): Promise<string> => {
+    const enc = new TextEncoder().encode(s);
+    const digest = await crypto.subtle.digest('SHA-256', enc);
+    return bytesToHex(new Uint8Array(digest));
+  };
+
+  /**
+   * チェーンの 1 ステップ。prevHex と curHex を連結したバイト列を SHA-256。
+   * （文字列連結ではなくバイト連結。hex の見た目に依存しない）
+   */
+  const chainStep = async (prevHex: string, curHex: string): Promise<string> => {
+    const prev = hexToBytes(prevHex);
+    const cur = hexToBytes(curHex);
+    const buf = new Uint8Array(prev.length + cur.length);
+    buf.set(prev, 0);
+    buf.set(cur, prev.length);
+    const digest = await crypto.subtle.digest('SHA-256', buf.buffer);
+    return bytesToHex(new Uint8Array(digest));
+  };
+
+  /** 空文字列の SHA-256（チェーン初期値） */
+  const emptyHash = async (): Promise<string> => sha256OfString('');
+
+  /**
+   * 元ファイル名のサニタイズ（表示用）。
+   * - 制御文字 (\x00-\x1f, \x7f) を除去
+   * - SVG/HTML タグ風の山括弧を除去（manifest 表示が active content にならないように）
+   * - 長さは 255 文字までで打ち切り
+   */
+  const sanitizeOriginalName = (orig: string): string => {
+    const stripped = orig
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .replace(/[<>]/g, '');
+    return stripped.length > 255 ? stripped.slice(0, 255) : stripped;
+  };
+
+  /** ファイル名サニタイズ。日付プレフィックス + index + 元拡張子 */
+  const safeName = (orig: string, index: number): string => {
+    const m = orig.match(/\.([a-zA-Z0-9]{1,8})$/);
+    const ext = m ? m[1].toLowerCase() : 'bin';
+    const idx = String(index + 1).padStart(3, '0');
+    return `${idx}.${ext}`;
+  };
+
+  /** 現在時刻 → YYYYMMDD-HHmmss */
+  const timestampForFilename = (d: Date): string => {
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    return (
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+      `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    );
+  };
+
+  const initOne = (root: HTMLElement): void => {
+    let copy: Copy;
+    try {
+      copy = JSON.parse(root.dataset.copy || '{}') as Copy;
+    } catch {
+      return;
+    }
+
+    if (
+      typeof crypto === 'undefined' ||
+      !crypto.subtle ||
+      typeof FileReader === 'undefined'
+    ) {
+      // 何もしない（フォールバック UI を出すほどではない、最新ブラウザ前提）
+      return;
+    }
+
+    // -------- タブ切り替え --------
+    const tabCreateBtn = root.querySelector<HTMLButtonElement>(
+      '[data-tab-btn="create"]',
+    );
+    const tabVerifyBtn = root.querySelector<HTMLButtonElement>(
+      '[data-tab-btn="verify"]',
+    );
+    const tabCreatePanel = root.querySelector<HTMLElement>(
+      '[data-tab-panel="create"]',
+    );
+    const tabVerifyPanel = root.querySelector<HTMLElement>(
+      '[data-tab-panel="verify"]',
+    );
+
+    const setTab = (which: 'create' | 'verify'): void => {
+      if (!tabCreateBtn || !tabVerifyBtn || !tabCreatePanel || !tabVerifyPanel)
+        return;
+      const isCreate = which === 'create';
+      tabCreateBtn.setAttribute('aria-selected', String(isCreate));
+      tabVerifyBtn.setAttribute('aria-selected', String(!isCreate));
+      tabCreateBtn.className =
+        'flex-1 px-4 py-2 text-sm font-semibold transition-colors ' +
+        (isCreate
+          ? 'bg-purple-600 text-white'
+          : 'bg-gray-900/40 text-gray-300 hover:bg-gray-800');
+      tabVerifyBtn.className =
+        'flex-1 px-4 py-2 text-sm font-semibold transition-colors ' +
+        (!isCreate
+          ? 'bg-emerald-600 text-white'
+          : 'bg-gray-900/40 text-gray-300 hover:bg-gray-800');
+      tabCreatePanel.classList.toggle('hidden', !isCreate);
+      tabVerifyPanel.classList.toggle('hidden', isCreate);
+    };
+
+    tabCreateBtn?.addEventListener('click', () => setTab('create'));
+    tabVerifyBtn?.addEventListener('click', () => setTab('verify'));
+
+    // ============================ 作成モード ============================
+    const createDropZone = root.querySelector<HTMLLabelElement>(
+      '[data-create-drop-zone]',
+    );
+    const createFileInput = root.querySelector<HTMLInputElement>(
+      '[data-create-file-input]',
+    );
+    const createErrorEl =
+      root.querySelector<HTMLElement>('[data-create-error]');
+    const createFilesSection = root.querySelector<HTMLElement>(
+      '[data-create-files-section]',
+    );
+    const createCountEl =
+      root.querySelector<HTMLElement>('[data-create-count]');
+    const createListEl = root.querySelector<HTMLUListElement>(
+      '[data-create-list]',
+    );
+    const createClearBtn = root.querySelector<HTMLButtonElement>(
+      '[data-create-clear]',
+    );
+    const createBtn = root.querySelector<HTMLButtonElement>('[data-create-btn]');
+    const createSuccessEl = root.querySelector<HTMLElement>(
+      '[data-create-success]',
+    );
+
+    let entries: FileEntry[] = [];
+    let nextId = 1;
+
+    const showCreateError = (msg: string): void => {
+      if (!createErrorEl) return;
+      createErrorEl.textContent = msg;
+      createErrorEl.classList.remove('hidden');
+    };
+    const clearCreateError = (): void => {
+      if (!createErrorEl) return;
+      createErrorEl.textContent = '';
+      createErrorEl.classList.add('hidden');
+    };
+
+    const renderList = (): void => {
+      if (!createListEl || !createFilesSection || !createCountEl) return;
+      if (entries.length === 0) {
+        createFilesSection.classList.add('hidden');
+        createListEl.innerHTML = '';
+        return;
+      }
+      createFilesSection.classList.remove('hidden');
+      createCountEl.textContent = copy.filesAdded.replace(
+        '{N}',
+        String(entries.length),
+      );
+      createListEl.innerHTML = '';
+      entries.forEach((entry, i) => {
+        const li = document.createElement('li');
+        li.className =
+          'flex items-center gap-3 border border-gray-700 bg-gray-900/40 rounded-md px-3 py-2 text-xs text-gray-200';
+        const idx = document.createElement('span');
+        idx.className =
+          'font-mono text-gray-500 w-8 shrink-0 text-center';
+        idx.textContent = String(i + 1).padStart(2, '0');
+        const meta = document.createElement('span');
+        meta.className = 'flex-1 min-w-0 break-all';
+        const sizeKb = (entry.file.size / 1024).toFixed(1);
+        meta.textContent = `${entry.file.name} · ${sizeKb} KB`;
+        li.appendChild(idx);
+        li.appendChild(meta);
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.textContent = '↑';
+        upBtn.title = copy.moveUp;
+        upBtn.className =
+          'px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-30';
+        upBtn.disabled = i === 0;
+        upBtn.addEventListener('click', () => {
+          if (i === 0) return;
+          [entries[i - 1], entries[i]] = [entries[i], entries[i - 1]];
+          renderList();
+        });
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.textContent = '↓';
+        downBtn.title = copy.moveDown;
+        downBtn.className =
+          'px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-30';
+        downBtn.disabled = i === entries.length - 1;
+        downBtn.addEventListener('click', () => {
+          if (i === entries.length - 1) return;
+          [entries[i + 1], entries[i]] = [entries[i], entries[i + 1]];
+          renderList();
+        });
+
+        const rmBtn = document.createElement('button');
+        rmBtn.type = 'button';
+        rmBtn.textContent = '×';
+        rmBtn.title = copy.remove;
+        rmBtn.className =
+          'px-2 py-1 rounded bg-gray-800 hover:bg-red-900 text-gray-300 hover:text-red-300';
+        rmBtn.addEventListener('click', () => {
+          entries = entries.filter((e) => e.id !== entry.id);
+          renderList();
+        });
+
+        li.appendChild(upBtn);
+        li.appendChild(downBtn);
+        li.appendChild(rmBtn);
+        createListEl.appendChild(li);
+      });
+    };
+
+    const addFiles = (files: FileList | File[]): void => {
+      clearCreateError();
+      const arr = Array.from(files);
+      const filtered: File[] = [];
+      for (const f of arr) {
+        if (!f.type.startsWith('image/')) {
+          showCreateError(copy.notImage);
+          continue;
+        }
+        filtered.push(f);
+      }
+      for (const f of filtered) {
+        entries.push({ file: f, id: nextId++ });
+      }
+      // 成功表示はリセット
+      if (createSuccessEl) {
+        createSuccessEl.textContent = '';
+        createSuccessEl.classList.add('hidden');
+      }
+      renderList();
+    };
+
+    createFileInput?.addEventListener('change', () => {
+      if (createFileInput.files && createFileInput.files.length > 0) {
+        addFiles(createFileInput.files);
+        createFileInput.value = '';
+      }
+    });
+
+    if (createDropZone) {
+      createDropZone.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      createDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        createDropZone.classList.add('border-purple-300');
+      });
+      createDropZone.addEventListener('dragleave', (e) => {
+        e.stopPropagation();
+        createDropZone.classList.remove('border-purple-300');
+      });
+      createDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        createDropZone.classList.remove('border-purple-300');
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length > 0) {
+          addFiles(dt.files);
+        }
+      });
+    }
+
+    createClearBtn?.addEventListener('click', () => {
+      entries = [];
+      renderList();
+      if (createSuccessEl) {
+        createSuccessEl.textContent = '';
+        createSuccessEl.classList.add('hidden');
+      }
+    });
+
+    const runCreate = async (): Promise<void> => {
+      if (!createBtn) return;
+      clearCreateError();
+      // 空 manifest ガード: ファイルが 1 件もなければ作成しない
+      if (entries.length === 0) {
+        showCreateError(copy.noFilesToCreate);
+        return;
+      }
+      createBtn.disabled = true;
+      createBtn.textContent = copy.creating;
+
+      try {
+        const zip = new JSZip();
+        const imagesFolder = zip.folder('images');
+        if (!imagesFolder) throw new Error('zip folder');
+
+        const manifestFiles: ManifestFile[] = [];
+        let prevChain = await emptyHash();
+
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
+          // SHA-256 計算用には ArrayBuffer が必要だが、ZIP には File をそのまま渡し、
+          // JSZip にバッファ全件メモリ保持を強制しないようにする（メモリ効率改善）。
+          const buf = await entry.file.arrayBuffer();
+          const fileSha = await sha256OfBuffer(buf);
+          const chain = await chainStep(prevChain, fileSha);
+          prevChain = chain;
+
+          const name = safeName(entry.file.name, i);
+          imagesFolder.file(name, entry.file);
+          manifestFiles.push({
+            name,
+            size: entry.file.size,
+            sha256: fileSha,
+            chain,
+            originalName: sanitizeOriginalName(entry.file.name),
+          });
+        }
+
+        const now = new Date();
+        const manifest: Manifest = {
+          version: '1.0',
+          createdAt: now.toISOString(),
+          tool: 'gilga evidence preserver',
+          files: manifestFiles,
+          rootHash: prevChain,
+        };
+        zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `gilga-evidence-${timestampForFilename(now)}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Blob URL は次のフレームで解放
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+        if (createSuccessEl) {
+          createSuccessEl.textContent = copy.downloadHint;
+          createSuccessEl.classList.remove('hidden');
+        }
+      } catch {
+        showCreateError(copy.zipReadFail);
+      } finally {
+        // ラベル復元は常に固定コピー値で（途中で書き換えられても復帰できる）
+        createBtn.textContent = copy.createBtn;
+        createBtn.disabled = false;
+      }
+    };
+
+    createBtn?.addEventListener('click', () => {
+      void runCreate();
+    });
+
+    // ============================ 検証モード ============================
+    const verifyDropZone = root.querySelector<HTMLLabelElement>(
+      '[data-verify-drop-zone]',
+    );
+    const verifyFileInput = root.querySelector<HTMLInputElement>(
+      '[data-verify-file-input]',
+    );
+    const verifyErrorEl = root.querySelector<HTMLElement>(
+      '[data-verify-error]',
+    );
+    const verifyProgressEl = root.querySelector<HTMLElement>(
+      '[data-verify-progress]',
+    );
+    const verifyResultEl = root.querySelector<HTMLElement>(
+      '[data-verify-result]',
+    );
+    const verifySummaryEl = root.querySelector<HTMLElement>(
+      '[data-verify-summary]',
+    );
+    const verifyCreatedEl = root.querySelector<HTMLElement>(
+      '[data-verify-created]',
+    );
+    const verifyCountEl = root.querySelector<HTMLElement>(
+      '[data-verify-count]',
+    );
+    const verifyRootEl = root.querySelector<HTMLElement>(
+      '[data-verify-root]',
+    );
+    const verifyListEl = root.querySelector<HTMLUListElement>(
+      '[data-verify-list]',
+    );
+
+    const showVerifyError = (msg: string): void => {
+      if (!verifyErrorEl) return;
+      verifyErrorEl.textContent = msg;
+      verifyErrorEl.classList.remove('hidden');
+    };
+    const clearVerifyError = (): void => {
+      if (!verifyErrorEl) return;
+      verifyErrorEl.textContent = '';
+      verifyErrorEl.classList.add('hidden');
+    };
+    const hideVerifyResult = (): void => {
+      verifyResultEl?.classList.add('hidden');
+    };
+
+    /** manifest の最低限のスキーマ検証 */
+    const validateManifest = (raw: unknown): Manifest | null => {
+      if (!raw || typeof raw !== 'object') return null;
+      const m = raw as Record<string, unknown>;
+      if (
+        typeof m.version !== 'string' ||
+        typeof m.createdAt !== 'string' ||
+        typeof m.tool !== 'string' ||
+        typeof m.rootHash !== 'string' ||
+        !Array.isArray(m.files)
+      ) {
+        return null;
+      }
+      // 空 manifest ガード: files は必ず 1 件以上
+      if (m.files.length < 1) return null;
+      const files: ManifestFile[] = [];
+      for (const f of m.files) {
+        if (!f || typeof f !== 'object') return null;
+        const fo = f as Record<string, unknown>;
+        if (
+          typeof fo.name !== 'string' ||
+          typeof fo.size !== 'number' ||
+          typeof fo.sha256 !== 'string' ||
+          typeof fo.chain !== 'string'
+        ) {
+          return null;
+        }
+        files.push({
+          name: fo.name,
+          size: fo.size,
+          sha256: fo.sha256,
+          chain: fo.chain,
+          originalName:
+            typeof fo.originalName === 'string'
+              ? sanitizeOriginalName(fo.originalName)
+              : undefined,
+        });
+      }
+      return {
+        version: m.version,
+        createdAt: m.createdAt,
+        tool: m.tool,
+        files,
+        rootHash: m.rootHash,
+      };
+    };
+
+    type VerifyRowStatus =
+      | 'ok'
+      | 'modified'
+      | 'missing'
+      | 'unknown'
+      | 'unverified-chain';
+
+    const renderSummary = (
+      kind: 'ok' | 'ng' | 'warn',
+      headline: string,
+      body: string,
+    ): void => {
+      if (!verifySummaryEl) return;
+      const cls =
+        kind === 'ok'
+          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+          : kind === 'ng'
+            ? 'border-red-500/50 bg-red-500/10 text-red-200'
+            : 'border-amber-500/50 bg-amber-500/10 text-amber-200';
+      const icon = kind === 'ok' ? '✅' : kind === 'ng' ? '❌' : '⚠️';
+      verifySummaryEl.className = `border rounded-md px-4 py-3 ${cls}`;
+      verifySummaryEl.innerHTML = '';
+      const h = document.createElement('p');
+      h.className = 'font-semibold flex items-center gap-2';
+      h.innerHTML = `<span aria-hidden="true">${icon}</span><span></span>`;
+      h.querySelectorAll('span')[1].textContent = headline;
+      const p = document.createElement('p');
+      p.className = 'text-xs mt-1 opacity-90';
+      p.textContent = body;
+      verifySummaryEl.appendChild(h);
+      verifySummaryEl.appendChild(p);
+    };
+
+    const renderVerifyRow = (
+      label: string,
+      status: VerifyRowStatus,
+      detail: string,
+    ): HTMLElement => {
+      const li = document.createElement('li');
+      const cls =
+        status === 'ok'
+          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200'
+          : status === 'modified'
+            ? 'border-red-500/40 bg-red-500/10 text-red-200'
+            : 'border-amber-500/40 bg-amber-500/10 text-amber-200';
+      li.className = `border rounded-md px-3 py-2 text-xs ${cls}`;
+      const head = document.createElement('div');
+      head.className = 'flex items-center justify-between font-mono';
+      const n = document.createElement('span');
+      n.className = 'break-all';
+      n.textContent = label;
+      const s = document.createElement('span');
+      s.className = 'shrink-0 ml-3';
+      const tag =
+        status === 'ok'
+          ? copy.statusOk
+          : status === 'modified'
+            ? copy.statusModified
+            : status === 'missing'
+              ? copy.statusMissing
+              : status === 'unverified-chain'
+                ? copy.statusUnverifiedChain
+                : copy.statusUnknown;
+      s.textContent = tag;
+      head.appendChild(n);
+      head.appendChild(s);
+      li.appendChild(head);
+      if (detail) {
+        const d = document.createElement('div');
+        d.className = 'opacity-70 mt-1 text-[10px] break-all';
+        d.textContent = detail;
+        li.appendChild(d);
+      }
+      return li;
+    };
+
+    const runVerify = async (file: File): Promise<void> => {
+      clearVerifyError();
+      hideVerifyResult();
+
+      if (
+        !file.name.toLowerCase().endsWith('.zip') &&
+        file.type !== 'application/zip' &&
+        file.type !== 'application/x-zip-compressed' &&
+        file.type !== ''
+      ) {
+        showVerifyError(copy.notZip);
+        return;
+      }
+
+      verifyProgressEl?.classList.remove('hidden');
+      try {
+        const buf = await file.arrayBuffer();
+
+        let zip: JSZip;
+        try {
+          zip = await JSZip.loadAsync(buf);
+        } catch {
+          showVerifyError(copy.zipReadFail);
+          return;
+        }
+
+        const manifestFile = zip.file('manifest.json');
+        if (!manifestFile) {
+          showVerifyError(copy.manifestMissing);
+          return;
+        }
+        const manifestText = await manifestFile.async('string');
+        let manifestRaw: unknown;
+        try {
+          manifestRaw = JSON.parse(manifestText);
+        } catch {
+          showVerifyError(copy.manifestParseFail);
+          return;
+        }
+        // 空 manifest を専用メッセージで弾く（validateManifest は null を返すだけで理由が分からない）
+        if (
+          manifestRaw &&
+          typeof manifestRaw === 'object' &&
+          Array.isArray((manifestRaw as Record<string, unknown>).files) &&
+          ((manifestRaw as Record<string, unknown>).files as unknown[])
+            .length === 0
+        ) {
+          showVerifyError(copy.manifestEmpty);
+          return;
+        }
+        const manifest = validateManifest(manifestRaw);
+        if (!manifest) {
+          showVerifyError(copy.manifestParseFail);
+          return;
+        }
+
+        if (verifyCreatedEl)
+          verifyCreatedEl.textContent = manifest.createdAt;
+        if (verifyCountEl)
+          verifyCountEl.textContent = String(manifest.files.length);
+        if (verifyRootEl) verifyRootEl.textContent = manifest.rootHash;
+
+        // 各ファイルを取り出してハッシュとチェーンを再計算
+        let prevChain = await emptyHash();
+        let allOk = true;
+        let anyMissingOrUnknown = false;
+        // 上流が欠落・改ざんで chain が崩れたら立てる。以降は chain 検証を skip。
+        let chainBroken = false;
+        const rows: HTMLElement[] = [];
+
+        // ZIP 内の images/* の存在を別途確認（manifest に無いファイルの検出用）
+        const imagesInZip = new Set<string>();
+        zip.forEach((path, entry) => {
+          if (entry.dir) return;
+          if (path.startsWith('images/')) {
+            imagesInZip.add(path.substring('images/'.length));
+          }
+        });
+
+        for (const mf of manifest.files) {
+          // 表示には sanitize 済 originalName を優先（fallback で内部 name）
+          const displayLabel = mf.originalName
+            ? `${mf.name} (${mf.originalName})`
+            : mf.name;
+          const inZip = zip.file(`images/${mf.name}`);
+          if (!inZip) {
+            allOk = false;
+            anyMissingOrUnknown = true;
+            rows.push(renderVerifyRow(displayLabel, 'missing', ''));
+            // 以降は chain が必ずずれるので chain 検証を停止する
+            chainBroken = true;
+            continue;
+          }
+          imagesInZip.delete(mf.name);
+          const fileBuf = await inZip.async('arraybuffer');
+          const sha = await sha256OfBuffer(fileBuf);
+
+          if (chainBroken) {
+            // chain は検証できない。内容ハッシュだけ突き合わせる。
+            let status: VerifyRowStatus;
+            let detail: string;
+            if (sha === mf.sha256) {
+              status = 'unverified-chain';
+              detail = `sha256: ${sha.slice(0, 16)}… (chain skipped)`;
+              anyMissingOrUnknown = true;
+              allOk = false;
+            } else {
+              status = 'modified';
+              detail = `sha256: ${sha.slice(0, 16)}… ≠ ${mf.sha256.slice(0, 16)}…`;
+              allOk = false;
+            }
+            rows.push(renderVerifyRow(displayLabel, status, detail));
+            continue;
+          }
+
+          const expectedChain = await chainStep(prevChain, sha);
+
+          let status: VerifyRowStatus = 'ok';
+          let detail = '';
+          if (sha !== mf.sha256) {
+            status = 'modified';
+            allOk = false;
+            chainBroken = true;
+            detail = `sha256: ${sha.slice(0, 16)}… ≠ ${mf.sha256.slice(0, 16)}…`;
+          } else if (expectedChain !== mf.chain) {
+            status = 'modified';
+            allOk = false;
+            chainBroken = true;
+            detail = `chain: recomputed ${expectedChain.slice(0, 16)}… ≠ ${mf.chain.slice(0, 16)}…`;
+          } else {
+            detail = `sha256: ${sha.slice(0, 16)}…`;
+          }
+
+          prevChain = mf.chain; // 後続検証のため manifest 上の chain を使う
+          rows.push(renderVerifyRow(displayLabel, status, detail));
+        }
+
+        // manifest に無い余分なファイル
+        for (const extra of imagesInZip) {
+          anyMissingOrUnknown = true;
+          rows.push(renderVerifyRow(extra, 'unknown', ''));
+        }
+
+        // root hash チェック
+        const lastChain =
+          manifest.files.length > 0
+            ? manifest.files[manifest.files.length - 1].chain
+            : await emptyHash();
+        const rootOk = lastChain === manifest.rootHash;
+        if (!rootOk) {
+          allOk = false;
+        }
+
+        if (verifyListEl) {
+          verifyListEl.innerHTML = '';
+          for (const r of rows) verifyListEl.appendChild(r);
+          if (!rootOk) {
+            verifyListEl.appendChild(
+              renderVerifyRow(
+                copy.rootHashLabel,
+                'modified',
+                copy.rootHashMismatch,
+              ),
+            );
+          }
+        }
+
+        if (allOk) {
+          renderSummary('ok', copy.verifyOk, copy.verifyOkBody);
+        } else if (anyMissingOrUnknown && rootOk) {
+          renderSummary('warn', copy.verifyWarn, '');
+        } else {
+          renderSummary('ng', copy.verifyNg, '');
+        }
+
+        verifyResultEl?.classList.remove('hidden');
+      } finally {
+        verifyProgressEl?.classList.add('hidden');
+      }
+    };
+
+    verifyFileInput?.addEventListener('change', () => {
+      if (verifyFileInput.files && verifyFileInput.files.length > 0) {
+        void runVerify(verifyFileInput.files[0]);
+        verifyFileInput.value = '';
+      }
+    });
+    if (verifyDropZone) {
+      verifyDropZone.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      verifyDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        verifyDropZone.classList.add('border-emerald-300');
+      });
+      verifyDropZone.addEventListener('dragleave', (e) => {
+        e.stopPropagation();
+        verifyDropZone.classList.remove('border-emerald-300');
+      });
+      verifyDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        verifyDropZone.classList.remove('border-emerald-300');
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length > 0) {
+          void runVerify(dt.files[0]);
+        }
+      });
+    }
+  };
+
+  const init = (): void => {
+    document
+      .querySelectorAll<HTMLElement>('[data-evidence-preserver]')
+      .forEach(initOne);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+</script>

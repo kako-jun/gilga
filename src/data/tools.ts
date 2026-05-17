@@ -27,6 +27,7 @@ export const tools: Tool[] = [
   { slug: 'unshorten', icon: '🔗', status: 'ready' },
   { slug: 'tracker', icon: '👁️', status: 'ready' },
   { slug: 'fingerprint', icon: '🕵️', status: 'ready' },
+  { slug: 'evidence', icon: '🛡️', status: 'ready' },
   { slug: null, icon: '⏳', status: 'coming-soon' },
 ];
 
@@ -47,6 +48,11 @@ export const toolsCopyJa: ToolCopy[] = [
   {
     title: 'ブラウザ指紋可視化',
     description: 'あなたのブラウザがどれだけ個人特定可能かをスコア化。',
+  },
+  {
+    title: 'いじめ証拠保全',
+    description:
+      'スクショにハッシュ+タイムスタンプを付与、改ざん検知できる証拠を作る。',
   },
   {
     title: '準備中',
@@ -71,6 +77,10 @@ export const toolsCopyEn: ToolCopy[] = [
   {
     title: 'Browser Fingerprint',
     description: 'See just how uniquely identifiable your browser is.',
+  },
+  {
+    title: 'Evidence Preserver',
+    description: 'Lock screenshots into a tamper-evident hash chain.',
   },
   {
     title: 'Coming Soon',

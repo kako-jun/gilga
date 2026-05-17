@@ -1,0 +1,111 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import EvidencePreserver from '@/components/EvidencePreserver.astro';
+---
+
+<Layout
+  title="いじめ証拠保全 — Gilga"
+  description="LINE や SNS のいじめスクショに、暗号学的なハッシュとタイムスタンプを付与。順序の入れ替えや内容の改ざんを後から検知できる ZIP を、ブラウザの中だけで作ります。"
+  lang="ja"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/ja/" class="flex items-center gap-2 group" aria-label="Gilga トップ">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="ja" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-12 pb-12">
+    <nav class="text-xs text-gray-500 mb-6">
+      <a href="/ja/" class="hover:text-purple-300">トップ</a>
+      <span class="mx-2">/</span>
+      <span class="text-gray-400">いじめ証拠保全</span>
+    </nav>
+
+    <section class="text-center mb-12">
+      <div class="text-5xl mb-4" aria-hidden="true">🛡️</div>
+      <h1
+        class="text-3xl sm:text-4xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        いじめ証拠保全
+      </h1>
+      <p class="text-base text-gray-300 max-w-2xl mx-auto">
+        LINE や SNS のいじめスクショを、
+        <strong class="text-red-400">後から改ざんできない形</strong>でまとめます。
+        ハッシュチェーンと ZIP で、「このスクショはこの順で、この日時に存在していた」ことを
+        第三者に説明する材料が作れます。
+      </p>
+      <p class="text-sm text-gray-500 mt-3 max-w-2xl mx-auto">
+        画像はサーバーに送りません。すべてブラウザの中で処理されます。
+      </p>
+    </section>
+
+    <EvidencePreserver lang="ja" />
+
+    <section class="mt-16 max-w-2xl mx-auto text-sm text-gray-400 space-y-4">
+      <h2 class="text-base font-semibold text-purple-300">仕組み</h2>
+      <ol class="list-decimal list-inside space-y-2 text-gray-400">
+        <li>
+          各画像の中身を <code class="text-purple-300">SHA-256</code> でハッシュ化します。
+        </li>
+        <li>
+          順番に「直前のチェーンハッシュ + そのファイルのハッシュ」をもう一度 SHA-256
+          する、いわゆる<strong class="text-purple-300">ハッシュチェーン</strong>を作ります。
+          1 枚でも順番を入れ替えると、それ以降のチェーンが全部崩れます。
+        </li>
+        <li>
+          最後のチェーン値を <code class="text-purple-300">rootHash</code> として
+          <code class="text-purple-300">manifest.json</code> に書きます。
+          作成日時（ISO8601）も一緒に記録します。
+        </li>
+        <li>
+          画像群と <code class="text-purple-300">manifest.json</code> を ZIP にまとめて
+          ダウンロードします。ファイル名は
+          <code class="text-purple-300">gilga-evidence-YYYYMMDD-HHmmss.zip</code>。
+        </li>
+        <li>
+          検証モードに ZIP をドロップすると、再計算した SHA-256
+          とチェーンを manifest と突き合わせ、改ざんがあれば赤で報告します。
+        </li>
+      </ol>
+
+      <h2 class="text-base font-semibold text-purple-300 pt-4">
+        できること / できないこと
+      </h2>
+      <ul class="space-y-2">
+        <li class="text-emerald-300">
+          ✅ 画像の<strong>内容の改ざん</strong>を検出できる（1 バイトでも変わると NG）
+        </li>
+        <li class="text-emerald-300">
+          ✅ 画像の<strong>順序の入れ替え</strong>を検出できる
+        </li>
+        <li class="text-emerald-300">
+          ✅ ファイルの<strong>追加 / 削除</strong>を検出できる
+        </li>
+        <li class="text-amber-300">
+          ⚠️ タイムスタンプは <strong>あなたの PC の時計</strong>（自己署名）。
+          「もっと前に作った」と主張されたら反証できません
+        </li>
+        <li class="text-amber-300">
+          ⚠️ 裁判で「証拠」として認めてもらうには、
+          第三者機関のタイムスタンプ（TSA）や OpenTimestamps 等が必要です
+        </li>
+      </ul>
+
+      <p class="text-xs text-gray-500 pt-2">
+        本ツールの主な使い道は、<strong>大人や先生、相談機関に状況を伝えるとき</strong>
+        に「この順で起きた、内容は手を加えていない」と示すための材料です。
+        正式な法的手続きが必要なときは、弁護士や公証役場、警察に相談してください。
+      </p>
+    </section>
+  </main>
+
+  <Footer lang="ja" />
+</Layout>
