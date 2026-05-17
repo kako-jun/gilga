@@ -1,0 +1,883 @@
+---
+/**
+ * TrackerDetector — クライアント完結のメール HTML トラッキングピクセル検出ツール。
+ *
+ * - メール HTML を <textarea> に貼り付ける（クリップボード貼り付けボタンあり）
+ * - DOMParser で <img> と <style> 内 background url() を抽出
+ * - 既知トラッキングサービス domain と suffix 一致で照合
+ * - 1x1 / 0x0 / display:none などの「見えない画像」も洗い出す
+ * - fetch / XHR / sendBeacon は使わない。完全にローカル
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const copy =
+  lang === 'ja'
+    ? {
+        clientOnly:
+          'サーバーに送りません。HTML はあなたのブラウザの中だけで解析されます。',
+        textareaLabel: 'メールの HTML ソースを貼り付け',
+        textareaPlaceholder:
+          'メールクライアントで「ソースを表示」したものをここに貼り付けてください。',
+        pasteFromClipboard: 'クリップボードから貼り付け',
+        analyze: '検出する',
+        clear: 'クリア',
+        loadSample: 'ニュースレターのサンプルを試す',
+        emptyInput: 'HTML を貼り付けてください。',
+        parseError: 'HTML を解析できませんでした。',
+        clipboardError:
+          'クリップボードから読み取れませんでした。手で貼り付けてください。',
+        summaryTotalImages: '画像タグ: {N} 個',
+        summaryTrackers: 'トラッキング判定: {N} 件',
+        summarySuspects: '疑わしい画像: {N} 件',
+        summaryCssTrackers: 'CSS 内の追跡候補: {N} 件',
+        noFindingsHeading: '怪しい画像は見つかりませんでした',
+        noFindingsNote:
+          'ただしリンク自体に追跡パラメータが付いている、CSS の細工で隠している、画像が外部 CDN にあるなど、検出できないケースもあります。安全とは限りません。',
+        trackerHeading: '検出されたトラッキングピクセル',
+        suspectHeading: '疑わしい画像（既知サービス外だが小さい / 隠されている）',
+        cssHeading: 'CSS background-image 経由の追跡候補',
+        badgeTracker: 'トラッキング',
+        badgeSuspect: '疑い',
+        badgeCss: 'CSS',
+        labelService: 'サービス',
+        labelHost: 'ホスト',
+        labelSize: 'サイズ',
+        labelHidden: '不可視化',
+        labelUrl: 'URL',
+        labelSnippet: 'HTML 抜粋',
+        sizePixels: '{W}×{H} px',
+        sizeOnePixel: '1×1 ピクセル（典型的な追跡）',
+        sizeZeroPixel: '0×0 ピクセル（さらに不自然）',
+        sizeNormal: '通常サイズ（だが追跡 URL）',
+        sizeUnknown: 'サイズ未指定',
+        hiddenDisplay: 'display:none',
+        hiddenVisibility: 'visibility:hidden',
+        hiddenOpacity: 'opacity:0',
+        hiddenOffscreen: '画面外配置',
+        unknownService: '未知のサービス',
+        suspectReasonSmall: '1×1 など極端に小さい外部画像',
+        suspectReasonHidden: 'スタイルで非表示にされた外部画像',
+        warningNote:
+          '※ 検出されたからといって即「悪」ではありません。多くは正規のメール配信サービスです。問題は「メールを開いた瞬間に相手にバレる」点です。',
+      }
+    : {
+        clientOnly:
+          'We never send your HTML anywhere. Everything is parsed inside your browser.',
+        textareaLabel: 'Paste the raw HTML of the email',
+        textareaPlaceholder:
+          'Use "View source" in your email client and paste the HTML here.',
+        pasteFromClipboard: 'Paste from clipboard',
+        analyze: 'Detect',
+        clear: 'Clear',
+        loadSample: 'Try a sample newsletter',
+        emptyInput: 'Please paste the HTML first.',
+        parseError: 'Failed to parse the HTML.',
+        clipboardError:
+          'Could not read the clipboard. Please paste manually.',
+        summaryTotalImages: 'Image tags: {N}',
+        summaryTrackers: 'Tracking pixels: {N}',
+        summarySuspects: 'Suspicious images: {N}',
+        summaryCssTrackers: 'CSS background trackers: {N}',
+        noFindingsHeading: 'No tracking pixels found',
+        noFindingsNote:
+          'But that does not mean the email is safe. Tracking parameters in links, CSS tricks, or images hosted on shared CDNs may still report when you open it.',
+        trackerHeading: 'Detected tracking pixels',
+        suspectHeading: 'Suspicious images (unknown service, but tiny / hidden)',
+        cssHeading: 'CSS background-image trackers',
+        badgeTracker: 'TRACKER',
+        badgeSuspect: 'SUSPECT',
+        badgeCss: 'CSS',
+        labelService: 'Service',
+        labelHost: 'Host',
+        labelSize: 'Size',
+        labelHidden: 'Hidden by',
+        labelUrl: 'URL',
+        labelSnippet: 'HTML excerpt',
+        sizePixels: '{W}×{H} px',
+        sizeOnePixel: '1×1 pixel (classic tracker)',
+        sizeZeroPixel: '0×0 pixel (even more suspicious)',
+        sizeNormal: 'Normal size (but tracking URL)',
+        sizeUnknown: 'Size not specified',
+        hiddenDisplay: 'display:none',
+        hiddenVisibility: 'visibility:hidden',
+        hiddenOpacity: 'opacity:0',
+        hiddenOffscreen: 'positioned off-screen',
+        unknownService: 'Unknown service',
+        suspectReasonSmall: 'Tiny (1×1-ish) external image',
+        suspectReasonHidden: 'External image hidden via CSS',
+        warningNote:
+          'Note: detection does not mean the sender is malicious. Most are legitimate ESPs. The point is that opening the email silently reports back to them.',
+      };
+
+// 既知のトラッキング配信サービスドメイン（hostname suffix で照合）
+const TRACKERS = [
+  { domain: 'mailchimp.com', service: 'Mailchimp' },
+  { domain: 'list-manage.com', service: 'Mailchimp' },
+  { domain: 'campaign-archive.com', service: 'Mailchimp Archive' },
+  { domain: 'hubspot.com', service: 'HubSpot' },
+  { domain: 'hs-analytics.net', service: 'HubSpot' },
+  { domain: 'hubspotemail.net', service: 'HubSpot' },
+  { domain: 'sendgrid.net', service: 'SendGrid' },
+  { domain: 'sendgrid.com', service: 'SendGrid' },
+  { domain: 'mailgun.org', service: 'Mailgun' },
+  { domain: 'mailgun.net', service: 'Mailgun' },
+  { domain: 'marketo.com', service: 'Marketo' },
+  { domain: 'mktoresp.com', service: 'Marketo' },
+  { domain: 'pardot.com', service: 'Pardot (Salesforce)' },
+  { domain: 'salesforce.com', service: 'Salesforce' },
+  { domain: 'exct.net', service: 'Salesforce Marketing Cloud' },
+  { domain: 'constantcontact.com', service: 'Constant Contact' },
+  { domain: 'rs6.net', service: 'Constant Contact' },
+  { domain: 'klaviyo.com', service: 'Klaviyo' },
+  { domain: 'mailerlite.com', service: 'MailerLite' },
+  { domain: 'mailerlite.net', service: 'MailerLite' },
+  { domain: 'mlsend.com', service: 'MailerSend' },
+  { domain: 'activehosted.com', service: 'ActiveCampaign' },
+  { domain: 'activecampaign.com', service: 'ActiveCampaign' },
+  { domain: 'cmail19.com', service: 'Campaign Monitor' },
+  { domain: 'cmail20.com', service: 'Campaign Monitor' },
+  { domain: 'createsend.com', service: 'Campaign Monitor' },
+  { domain: 'eu.cmail.com', service: 'Campaign Monitor EU' },
+  { domain: 'amazonses.com', service: 'Amazon SES' },
+  { domain: 'omtrdc.net', service: 'Adobe Analytics' },
+  { domain: 'demdex.net', service: 'Adobe Audience Manager' },
+  { domain: 'doubleclick.net', service: 'Google DoubleClick' },
+  { domain: 'google-analytics.com', service: 'Google Analytics' },
+  { domain: 'analytics.google.com', service: 'Google Analytics' },
+  { domain: 'beehiiv.com', service: 'Beehiiv' },
+  { domain: 'substack.com', service: 'Substack' },
+  { domain: 'convertkit.com', service: 'ConvertKit / Kit' },
+  { domain: 'kit.com', service: 'ConvertKit / Kit' },
+  { domain: 'eloqua.com', service: 'Oracle Eloqua' },
+];
+
+// 実害ゼロのサンプル HTML（架空のニュースレター。実在しないドメインも混ぜている）
+const SAMPLE_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Newsletter</title>
+  <style>
+    .secret-tracker {
+      background-image: url('https://email.exct.net/open?u=00000000-0000-0000-0000-000000000000');
+      width: 1px;
+      height: 1px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Weekly Newsletter</h1>
+  <p>Welcome back! Here is what is new this week.</p>
+
+  <img src="https://cdn.example.com/header-banner.jpg" width="600" height="200" alt="Header" />
+
+  <a href="https://example.com/article">Read the article</a>
+
+  <!-- Mailchimp open tracker -->
+  <img
+    src="https://example.us1.list-manage.com/track/open.php?u=abc&id=123"
+    width="1"
+    height="1"
+    alt=""
+    style="border:0;height:1px;width:1px;display:block;" />
+
+  <!-- HubSpot open tracker -->
+  <img
+    src="https://track.hubspot.com/__ptq.gif?a=12345&k=14&r=&bu=&bvt=rss"
+    height="1"
+    width="1"
+    style="display:none !important;" />
+
+  <!-- SendGrid open tracker -->
+  <img
+    src="https://u123.ct.sendgrid.net/wf/open?upn=AbCdEf"
+    alt=""
+    width="1"
+    height="1" />
+
+  <!-- 未知サービスの 1x1 (suspect 扱いになる想定) -->
+  <img
+    src="https://pixel.unknown-tracker.example/p.gif?id=xyz"
+    width="1"
+    height="1"
+    style="visibility:hidden" />
+
+  <!-- CSS background-image 経由の追跡 -->
+  <div class="secret-tracker"></div>
+
+  <p>&mdash; Newsletter Team</p>
+</body>
+</html>`;
+---
+
+<section
+  class="w-full max-w-3xl mx-auto"
+  data-tracker-detector
+  data-copy={JSON.stringify(copy)}
+  data-trackers={JSON.stringify(TRACKERS)}
+  data-sample={SAMPLE_HTML}
+>
+  <p
+    class="text-sm text-purple-300 border border-purple-500/40 bg-purple-500/10 rounded-md px-4 py-3 mb-6 flex items-start gap-2"
+  >
+    <span aria-hidden="true">🛡️</span>
+    <span>{copy.clientOnly}</span>
+  </p>
+
+  <label class="block">
+    <span class="block text-sm text-gray-300 mb-2">{copy.textareaLabel}</span>
+    <textarea
+      data-html-input
+      rows="10"
+      placeholder={copy.textareaPlaceholder}
+      class="w-full bg-gray-900/60 border border-gray-700 focus:border-purple-400 focus:outline-none rounded-lg px-3 py-2 font-mono text-xs text-gray-200 placeholder-gray-600 resize-y min-h-[180px]"
+    ></textarea>
+  </label>
+
+  <div class="mt-3 flex flex-wrap gap-2">
+    <button
+      type="button"
+      data-analyze-btn
+      class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 disabled:opacity-60"
+    >
+      {copy.analyze}
+    </button>
+    <button
+      type="button"
+      data-paste-btn
+      class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors"
+    >
+      {copy.pasteFromClipboard}
+    </button>
+    <button
+      type="button"
+      data-sample-btn
+      class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors"
+    >
+      {copy.loadSample}
+    </button>
+    <button
+      type="button"
+      data-clear-btn
+      class="px-4 py-2 rounded-lg bg-transparent hover:bg-gray-800 border border-gray-700 text-gray-400 transition-colors ml-auto"
+    >
+      {copy.clear}
+    </button>
+  </div>
+
+  <p
+    class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
+    data-error
+  >
+  </p>
+
+  <div class="hidden mt-8" data-result>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" data-summary></div>
+
+    <div class="hidden mb-8" data-no-findings>
+      <div
+        class="border border-emerald-500/40 bg-emerald-500/5 rounded-lg px-4 py-4"
+      >
+        <p class="text-emerald-300 font-semibold mb-2">
+          {copy.noFindingsHeading}
+        </p>
+        <p class="text-xs text-gray-400">{copy.noFindingsNote}</p>
+      </div>
+    </div>
+
+    <div class="hidden mb-8" data-tracker-section>
+      <h3 class="text-sm font-semibold text-red-400 mb-3 flex items-center gap-2">
+        <span aria-hidden="true">⚠️</span>
+        <span>{copy.trackerHeading}</span>
+      </h3>
+      <ul class="space-y-3" data-tracker-list></ul>
+    </div>
+
+    <div class="hidden mb-8" data-suspect-section>
+      <h3 class="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
+        <span aria-hidden="true">❓</span>
+        <span>{copy.suspectHeading}</span>
+      </h3>
+      <ul class="space-y-3" data-suspect-list></ul>
+    </div>
+
+    <div class="hidden mb-8" data-css-section>
+      <h3 class="text-sm font-semibold text-orange-400 mb-3 flex items-center gap-2">
+        <span aria-hidden="true">🎨</span>
+        <span>{copy.cssHeading}</span>
+      </h3>
+      <ul class="space-y-3" data-css-list></ul>
+    </div>
+
+    <p class="text-xs text-gray-500 border-t border-gray-800 pt-4">
+      {copy.warningNote}
+    </p>
+  </div>
+</section>
+
+<script>
+  type Copy = {
+    clientOnly: string;
+    textareaLabel: string;
+    textareaPlaceholder: string;
+    pasteFromClipboard: string;
+    analyze: string;
+    clear: string;
+    loadSample: string;
+    emptyInput: string;
+    parseError: string;
+    clipboardError: string;
+    summaryTotalImages: string;
+    summaryTrackers: string;
+    summarySuspects: string;
+    summaryCssTrackers: string;
+    noFindingsHeading: string;
+    noFindingsNote: string;
+    trackerHeading: string;
+    suspectHeading: string;
+    cssHeading: string;
+    badgeTracker: string;
+    badgeSuspect: string;
+    badgeCss: string;
+    labelService: string;
+    labelHost: string;
+    labelSize: string;
+    labelHidden: string;
+    labelUrl: string;
+    labelSnippet: string;
+    sizePixels: string;
+    sizeOnePixel: string;
+    sizeZeroPixel: string;
+    sizeNormal: string;
+    sizeUnknown: string;
+    hiddenDisplay: string;
+    hiddenVisibility: string;
+    hiddenOpacity: string;
+    hiddenOffscreen: string;
+    unknownService: string;
+    suspectReasonSmall: string;
+    suspectReasonHidden: string;
+    warningNote: string;
+  };
+
+  type TrackerEntry = { domain: string; service: string };
+
+  type SizeInfo = {
+    width: number | null;
+    height: number | null;
+    kind: 'onePixel' | 'zeroPixel' | 'normal' | 'unknown';
+  };
+
+  type Finding = {
+    kind: 'tracker' | 'suspect' | 'css';
+    url: string;
+    host: string;
+    service: string | null;
+    size: SizeInfo;
+    hiddenReasons: string[];
+    snippet: string;
+  };
+
+  /** url 文字列を hostname に。失敗したら null。 */
+  const hostnameOf = (url: string): string | null => {
+    try {
+      const u = new URL(url, 'http://example.invalid/');
+      return u.hostname.toLowerCase() || null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** ホスト名と TRACKERS の suffix 一致で照合（誤検知低減のため endsWith） */
+  const matchTracker = (
+    host: string,
+    trackers: TrackerEntry[],
+  ): TrackerEntry | null => {
+    for (const t of trackers) {
+      const d = t.domain.toLowerCase();
+      if (host === d || host.endsWith('.' + d)) return t;
+    }
+    return null;
+  };
+
+  /** width/height 属性 + inline style からサイズを推定。1x1 / 0x0 等を判定。 */
+  const detectSize = (img: HTMLImageElement): SizeInfo => {
+    const parseDim = (v: string | null | undefined): number | null => {
+      if (v == null || v === '') return null;
+      // "1px" や "1" は許容、"100%" は不明扱い
+      const m = String(v).trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    let width = parseDim(img.getAttribute('width'));
+    let height = parseDim(img.getAttribute('height'));
+
+    const style = (img.getAttribute('style') || '').toLowerCase();
+    if (width == null) {
+      const m = style.match(/(?:^|;|\s)width\s*:\s*([^;]+)/);
+      if (m) width = parseDim(m[1].trim());
+    }
+    if (height == null) {
+      const m = style.match(/(?:^|;|\s)height\s*:\s*([^;]+)/);
+      if (m) height = parseDim(m[1].trim());
+    }
+
+    let kind: SizeInfo['kind'] = 'unknown';
+    if (width != null && height != null) {
+      if (width === 0 || height === 0) kind = 'zeroPixel';
+      else if (width <= 1 && height <= 1) kind = 'onePixel';
+      else if (width <= 3 && height <= 3) kind = 'onePixel';
+      else kind = 'normal';
+    }
+
+    return { width, height, kind };
+  };
+
+  /** inline style と属性から「人間からは見えない」要因を抽出。 */
+  const detectHidden = (img: HTMLImageElement, copy: Copy): string[] => {
+    const reasons: string[] = [];
+    const style = (img.getAttribute('style') || '').toLowerCase();
+
+    if (/display\s*:\s*none/.test(style)) reasons.push(copy.hiddenDisplay);
+    if (/visibility\s*:\s*hidden/.test(style)) reasons.push(copy.hiddenVisibility);
+    if (/opacity\s*:\s*0(?:\.0+)?(?![\d.])/.test(style))
+      reasons.push(copy.hiddenOpacity);
+    // position: absolute; left: -9999px 等のオフスクリーン手法
+    if (/(left|top)\s*:\s*-\s*\d{3,}/.test(style)) reasons.push(copy.hiddenOffscreen);
+
+    // hidden 属性
+    if (img.hasAttribute('hidden')) reasons.push(copy.hiddenDisplay);
+
+    return reasons;
+  };
+
+  /** URL を短縮表示用に整形（host + path 先頭）。 */
+  const formatUrl = (url: string): string => {
+    try {
+      const u = new URL(url, 'http://example.invalid/');
+      const pathQuery = (u.pathname || '/') + (u.search || '');
+      const short =
+        pathQuery.length > 50 ? pathQuery.slice(0, 47) + '...' : pathQuery;
+      return u.host + short;
+    } catch {
+      return url.length > 80 ? url.slice(0, 77) + '...' : url;
+    }
+  };
+
+  /** 要素のアウター HTML を最大 200 文字に切り詰めて返す。 */
+  const snippetOf = (el: Element): string => {
+    let s = '';
+    try {
+      s = el.outerHTML;
+    } catch {
+      s = '';
+    }
+    s = s.replace(/\s+/g, ' ').trim();
+    return s.length > 200 ? s.slice(0, 197) + '...' : s;
+  };
+
+  /** <style> 内 url() を雑に拾う。マッチした url 文字列の配列を返す。 */
+  const extractCssUrls = (doc: Document): string[] => {
+    const urls: string[] = [];
+    const styleEls = doc.querySelectorAll('style');
+    const urlRe = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+    styleEls.forEach((el) => {
+      const text = el.textContent || '';
+      let m: RegExpExecArray | null;
+      while ((m = urlRe.exec(text)) !== null) {
+        urls.push(m[2].trim());
+      }
+    });
+    // inline style="background...url(...)" も拾う
+    const allEls = doc.querySelectorAll('[style]');
+    allEls.forEach((el) => {
+      const text = el.getAttribute('style') || '';
+      let m: RegExpExecArray | null;
+      const re = new RegExp(urlRe.source, urlRe.flags);
+      while ((m = re.exec(text)) !== null) {
+        urls.push(m[2].trim());
+      }
+    });
+    return urls;
+  };
+
+  const initOne = (root: HTMLElement): void => {
+    let copy: Copy;
+    let trackers: TrackerEntry[];
+    try {
+      copy = JSON.parse(root.dataset.copy || '{}') as Copy;
+      trackers = JSON.parse(root.dataset.trackers || '[]') as TrackerEntry[];
+    } catch {
+      return;
+    }
+    const sample = root.dataset.sample || '';
+
+    const input = root.querySelector<HTMLTextAreaElement>('[data-html-input]');
+    const analyzeBtn = root.querySelector<HTMLButtonElement>('[data-analyze-btn]');
+    const pasteBtn = root.querySelector<HTMLButtonElement>('[data-paste-btn]');
+    const sampleBtn = root.querySelector<HTMLButtonElement>('[data-sample-btn]');
+    const clearBtn = root.querySelector<HTMLButtonElement>('[data-clear-btn]');
+    const errorEl = root.querySelector<HTMLElement>('[data-error]');
+    const resultEl = root.querySelector<HTMLElement>('[data-result]');
+    const summaryEl = root.querySelector<HTMLElement>('[data-summary]');
+    const noFindingsEl = root.querySelector<HTMLElement>('[data-no-findings]');
+    const trackerSection = root.querySelector<HTMLElement>('[data-tracker-section]');
+    const trackerList = root.querySelector<HTMLElement>('[data-tracker-list]');
+    const suspectSection = root.querySelector<HTMLElement>('[data-suspect-section]');
+    const suspectList = root.querySelector<HTMLElement>('[data-suspect-list]');
+    const cssSection = root.querySelector<HTMLElement>('[data-css-section]');
+    const cssList = root.querySelector<HTMLElement>('[data-css-list]');
+
+    if (
+      !input ||
+      !analyzeBtn ||
+      !pasteBtn ||
+      !sampleBtn ||
+      !clearBtn ||
+      !errorEl ||
+      !resultEl ||
+      !summaryEl ||
+      !noFindingsEl ||
+      !trackerSection ||
+      !trackerList ||
+      !suspectSection ||
+      !suspectList ||
+      !cssSection ||
+      !cssList
+    ) {
+      return;
+    }
+
+    const showError = (msg: string): void => {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+    };
+    const clearError = (): void => {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    };
+
+    const renderSummary = (
+      totalImages: number,
+      trackerCount: number,
+      suspectCount: number,
+      cssCount: number,
+    ): void => {
+      summaryEl.innerHTML = '';
+      const items: Array<{ label: string; color: string }> = [
+        {
+          label: copy.summaryTotalImages.replace('{N}', String(totalImages)),
+          color: 'text-gray-300 border-gray-700',
+        },
+        {
+          label: copy.summaryTrackers.replace('{N}', String(trackerCount)),
+          color:
+            trackerCount > 0
+              ? 'text-red-300 border-red-500/40 bg-red-500/5'
+              : 'text-gray-500 border-gray-800',
+        },
+        {
+          label: copy.summarySuspects.replace('{N}', String(suspectCount)),
+          color:
+            suspectCount > 0
+              ? 'text-yellow-300 border-yellow-500/40 bg-yellow-500/5'
+              : 'text-gray-500 border-gray-800',
+        },
+        {
+          label: copy.summaryCssTrackers.replace('{N}', String(cssCount)),
+          color:
+            cssCount > 0
+              ? 'text-orange-300 border-orange-500/40 bg-orange-500/5'
+              : 'text-gray-500 border-gray-800',
+        },
+      ];
+      for (const item of items) {
+        const div = document.createElement('div');
+        div.className = `border ${item.color} rounded-md px-3 py-2 text-xs font-mono text-center`;
+        div.textContent = item.label;
+        summaryEl.appendChild(div);
+      }
+    };
+
+    const sizeText = (size: SizeInfo): string => {
+      if (size.kind === 'onePixel') {
+        const dims =
+          size.width != null && size.height != null
+            ? copy.sizePixels
+                .replace('{W}', String(size.width))
+                .replace('{H}', String(size.height))
+            : '1×1 px';
+        return `${dims} — ${copy.sizeOnePixel}`;
+      }
+      if (size.kind === 'zeroPixel') return copy.sizeZeroPixel;
+      if (size.kind === 'normal' && size.width != null && size.height != null) {
+        return copy.sizePixels
+          .replace('{W}', String(size.width))
+          .replace('{H}', String(size.height));
+      }
+      return copy.sizeUnknown;
+    };
+
+    const renderRow = (label: string, value: string, valueClass = ''): HTMLElement => {
+      const row = document.createElement('div');
+      row.className = 'grid grid-cols-[80px_1fr] gap-2 text-xs';
+      const l = document.createElement('span');
+      l.className = 'text-gray-500 uppercase tracking-wider';
+      l.textContent = label;
+      const v = document.createElement('span');
+      v.className = `break-all ${valueClass || 'text-gray-200'}`;
+      v.textContent = value;
+      row.appendChild(l);
+      row.appendChild(v);
+      return row;
+    };
+
+    const renderSnippet = (snippet: string): HTMLElement => {
+      const wrap = document.createElement('details');
+      wrap.className = 'mt-2';
+      const sum = document.createElement('summary');
+      sum.className = 'cursor-pointer text-xs text-gray-500 hover:text-purple-300';
+      sum.textContent = copy.labelSnippet;
+      const pre = document.createElement('pre');
+      pre.className =
+        'mt-2 text-[10px] font-mono bg-black/40 text-gray-400 rounded px-2 py-1 overflow-x-auto whitespace-pre-wrap break-all';
+      pre.textContent = snippet;
+      wrap.appendChild(sum);
+      wrap.appendChild(pre);
+      return wrap;
+    };
+
+    const renderFinding = (
+      finding: Finding,
+      list: HTMLElement,
+      badgeColor: string,
+      badgeText: string,
+      borderColor: string,
+    ): void => {
+      const li = document.createElement('li');
+      li.className = `border ${borderColor} rounded-md px-3 py-3`;
+
+      const header = document.createElement('div');
+      header.className = 'flex items-center justify-between gap-2 mb-2';
+      const badge = document.createElement('span');
+      badge.className = `text-[10px] px-2 py-0.5 rounded font-bold tracking-wider ${badgeColor}`;
+      badge.textContent = badgeText;
+      const host = document.createElement('span');
+      host.className = 'text-sm text-white font-mono break-all text-right';
+      host.textContent = finding.host || '—';
+      header.appendChild(badge);
+      header.appendChild(host);
+      li.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'space-y-1';
+
+      body.appendChild(
+        renderRow(
+          copy.labelService,
+          finding.service ?? copy.unknownService,
+          finding.service ? 'text-red-300' : 'text-yellow-300',
+        ),
+      );
+      body.appendChild(renderRow(copy.labelSize, sizeText(finding.size)));
+      if (finding.hiddenReasons.length > 0) {
+        body.appendChild(
+          renderRow(copy.labelHidden, finding.hiddenReasons.join(', ')),
+        );
+      }
+      body.appendChild(
+        renderRow(copy.labelUrl, formatUrl(finding.url), 'text-gray-400 font-mono'),
+      );
+
+      li.appendChild(body);
+      if (finding.snippet) li.appendChild(renderSnippet(finding.snippet));
+      list.appendChild(li);
+    };
+
+    const analyze = (): void => {
+      clearError();
+      const html = input.value.trim();
+      if (html === '') {
+        showError(copy.emptyInput);
+        resultEl.classList.add('hidden');
+        return;
+      }
+
+      let doc: Document;
+      try {
+        doc = new DOMParser().parseFromString(html, 'text/html');
+      } catch {
+        showError(copy.parseError);
+        return;
+      }
+
+      const allImgs = Array.from(doc.querySelectorAll('img'));
+      const trackerFindings: Finding[] = [];
+      const suspectFindings: Finding[] = [];
+
+      for (const img of allImgs) {
+        const src =
+          img.getAttribute('src') ||
+          img.getAttribute('data-src') ||
+          '';
+        if (src === '') continue;
+        // data: URL は外部送信しないので除外
+        if (/^data:/i.test(src)) continue;
+
+        const host = hostnameOf(src);
+        if (host == null) continue;
+
+        const size = detectSize(img);
+        const hiddenReasons = detectHidden(img, copy);
+        const matched = matchTracker(host, trackers);
+        const snippet = snippetOf(img);
+
+        if (matched) {
+          trackerFindings.push({
+            kind: 'tracker',
+            url: src,
+            host,
+            service: matched.service,
+            size,
+            hiddenReasons,
+            snippet,
+          });
+        } else {
+          // 既知サービス外でも、1x1 や非表示の外部画像は suspect 扱い
+          const isSmall = size.kind === 'onePixel' || size.kind === 'zeroPixel';
+          const isHidden = hiddenReasons.length > 0;
+          if (isSmall || isHidden) {
+            suspectFindings.push({
+              kind: 'suspect',
+              url: src,
+              host,
+              service: null,
+              size,
+              hiddenReasons,
+              snippet,
+            });
+          }
+        }
+      }
+
+      // CSS background-image 経由
+      const cssFindings: Finding[] = [];
+      const seenCssUrls = new Set<string>();
+      for (const url of extractCssUrls(doc)) {
+        if (/^data:/i.test(url)) continue;
+        if (seenCssUrls.has(url)) continue;
+        seenCssUrls.add(url);
+        const host = hostnameOf(url);
+        if (host == null) continue;
+        const matched = matchTracker(host, trackers);
+        // CSS の場合は既知 ESP か、明らかに画像扱いの拡張子だけ拾う
+        const looksImage = /\.(gif|png|jpe?g|webp|svg)(\?|$)/i.test(url);
+        if (!matched && !looksImage) continue;
+        cssFindings.push({
+          kind: 'css',
+          url,
+          host,
+          service: matched ? matched.service : null,
+          size: { width: null, height: null, kind: 'unknown' },
+          hiddenReasons: [],
+          snippet: '',
+        });
+      }
+
+      renderSummary(
+        allImgs.length,
+        trackerFindings.length,
+        suspectFindings.length,
+        cssFindings.length,
+      );
+
+      // セクション初期化
+      trackerList.innerHTML = '';
+      suspectList.innerHTML = '';
+      cssList.innerHTML = '';
+      trackerSection.classList.add('hidden');
+      suspectSection.classList.add('hidden');
+      cssSection.classList.add('hidden');
+      noFindingsEl.classList.add('hidden');
+
+      for (const f of trackerFindings) {
+        renderFinding(
+          f,
+          trackerList,
+          'bg-red-500/20 text-red-300',
+          copy.badgeTracker,
+          'border-red-500/40 bg-red-500/5',
+        );
+      }
+      for (const f of suspectFindings) {
+        renderFinding(
+          f,
+          suspectList,
+          'bg-yellow-500/20 text-yellow-300',
+          copy.badgeSuspect,
+          'border-yellow-500/40 bg-yellow-500/5',
+        );
+      }
+      for (const f of cssFindings) {
+        renderFinding(
+          f,
+          cssList,
+          'bg-orange-500/20 text-orange-300',
+          copy.badgeCss,
+          'border-orange-500/40 bg-orange-500/5',
+        );
+      }
+
+      if (trackerFindings.length > 0) trackerSection.classList.remove('hidden');
+      if (suspectFindings.length > 0) suspectSection.classList.remove('hidden');
+      if (cssFindings.length > 0) cssSection.classList.remove('hidden');
+      if (
+        trackerFindings.length === 0 &&
+        suspectFindings.length === 0 &&
+        cssFindings.length === 0
+      ) {
+        noFindingsEl.classList.remove('hidden');
+      }
+
+      resultEl.classList.remove('hidden');
+    };
+
+    analyzeBtn.addEventListener('click', analyze);
+    sampleBtn.addEventListener('click', () => {
+      input.value = sample;
+      clearError();
+      analyze();
+    });
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      clearError();
+      resultEl.classList.add('hidden');
+    });
+    pasteBtn.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        input.value = text;
+        clearError();
+      } catch {
+        showError(copy.clipboardError);
+      }
+    });
+  };
+
+  const init = (): void => {
+    document
+      .querySelectorAll<HTMLElement>('[data-tracker-detector]')
+      .forEach(initOne);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+</script>
