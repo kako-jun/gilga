@@ -2,144 +2,67 @@
 
 ## これは何か
 
-**Gilga** = 登録不要のチャット＆SNSアプリ
+**Gilga** = 悪意から弱い人を守る義賊ブランド。
 
-ユーザーには技術を見せない。Nostrという単語すら出さない。
-「開いたら使える」を実現する。
+知識の非対称で搾取される人を、無料で技術を使って助ける。
+ストーカーウェア、詐欺、ダークパターン、デジタル遺品などの領域を扱う。
 
-## 思想（重要）
+アイコンは「悪意を舐めて見破る舌」。
 
-**ルネッサンス的人間讃歌**
+## 設計方針
 
-- 欲望を肯定する（承認欲求、金銭欲、帰属欲求）
-- 技術を隠す（Nostr、NIP、リレーは見せない）
-- 統合する（サイロ化せず全部一つの流れに）
-- Zapは入れない（おねだりUIは思想に反する）
-
-詳細は `docs/philosophy.md` を参照。
+- **UGC なし** — 投稿・コメント等のユーザ生成コンテンツは扱わない
+- **中継・プロキシなし** — トラフィックを預からない
+- **ファイル共有なし** — ストレージサービスはやらない
+- **CF 無料枠で動く** — Cloudflare Pages 静的配信で完結する範囲に絞る
+- **AI 生成 + 人間レビュー** — 静的コンテンツは AI で量産し、人間が公開前に確認
 
 ## 技術スタック
 
-| レイヤー | 技術 |
-|----------|------|
-| ランタイム | Tauri (Rust) |
-| フロント | React + TypeScript |
-| プロトコル | Nostr |
-| Nostr SDK | nostr-sdk (Rust) |
+- Astro 5 + TypeScript + Tailwind CSS
+- Cloudflare Pages（無料枠、別 Issue #8 で配線）
+- i18n: ja / en（prefixDefaultLocale: true、'/' → '/ja/'）
 
 ## ディレクトリ構造
 
 ```
 gilga/
-├── src-tauri/          # Rustバックエンド
-│   ├── src/
-│   │   ├── main.rs         # エントリーポイント
-│   │   ├── lib.rs          # Tauriコマンド定義
-│   │   └── nostr_client.rs # Nostrクライアント
-│   └── Cargo.toml
-├── src/                # Reactフロント
-│   ├── App.tsx         # メインUI
-│   ├── Settings.tsx    # 設定画面
-│   └── *.css
-├── docs/
-│   ├── README.md       # ユーザー向け
-│   ├── philosophy.md   # 設計思想
-│   ├── architecture.md # 技術詳細
-│   ├── ux-design.md    # UX設計
-│   └── roadmap.md      # ロードマップ
+├── astro.config.mjs    # サイトURL、i18n、redirects
+├── tailwind.config.mjs
+├── tsconfig.json       # @/* パスエイリアス
+├── package.json        # pnpm 管理
+├── pnpm-workspace.yaml # esbuild/sharp の build script 許可
+├── src/
+│   ├── layouts/
+│   │   └── Layout.astro    # 黒背景 + 白文字の最小スケルトン
+│   └── pages/
+│       ├── ja/index.astro  # 日本語トップ
+│       └── en/index.astro  # 英語トップ
 └── CLAUDE.md           # このファイル
 ```
 
 ## 開発コマンド
 
 ```bash
-# 開発
-cargo tauri dev
-
-# ビルド
-cargo tauri build
-
-# テスト
-cargo test
+pnpm install        # 依存導入
+pnpm dev            # http://localhost:4321
+pnpm build          # astro check + astro build
+pnpm preview        # ビルド後プレビュー
+pnpm format         # prettier --write
 ```
 
-## コア機能
+## 旧構成について
 
-### 統合ストリーム
+session452 までは Nostr クライアント (Tauri + React) として動いていたが、
+2026-04-11 に役割を終了し、本ブランドへ転換した。旧コードは履歴に残るのみで
+復活させない。
 
-チャット（kind:42）とSNS（kind:1）を一本の流れで表示。
+## 関連メモ
 
-### 鍵管理
-
-- 初回起動時に自動生成、~/.gilga/keys.json に保存
-- nsec形式でエクスポート/インポート可能
-
-### プロフィール
-
-- kind:0 メタデータで管理
-- 名前、表示名、自己紹介、アバター、ウェブサイト、NIP-05
-
-### ミュート
-
-- ユーザー単位でミュート可能
-- ~/.gilga/muted.json に永続化
-
-### リレー
-
-- 追加・削除可能
-- ~/.gilga/relays.json に永続化
-
-### オーバーレイ
-
-ゲーム中でも邪魔にならない常駐UI。
-トレイアイコンをクリックで表示/非表示切替。
-
-## ホットキー
-
-| キー | 動作 |
-|------|------|
-| Shift+Enter | 送信 |
-
-## 禁止事項
-
-### 実装しないもの
-
-- Zap（投げ銭）
-- チュートリアル
-
-### 技術用語を最小限に
-
-設定画面では必要最低限の技術用語のみ使用。
-ただし、既存Nostrユーザー向けにnsecインポートは提供。
-
-## ドキュメント
-
-| ファイル | 内容 |
-|----------|------|
-| docs/README.md | ユーザー向け説明 |
-| docs/philosophy.md | 設計思想 |
-| docs/architecture.md | 技術仕様 |
-| docs/ux-design.md | UI/UX設計 |
-| docs/roadmap.md | ロードマップ |
-
-## Tauriコマンド一覧
-
-| コマンド | 機能 |
-|----------|------|
-| connect | Nostr接続開始 |
-| send_message | メッセージ送信 |
-| get_messages | メッセージ取得 |
-| get_public_key | 公開鍵取得 |
-| export_secret_key | 秘密鍵エクスポート |
-| import_secret_key | 秘密鍵インポート |
-| mute_user | ユーザーミュート |
-| unmute_user | ミュート解除 |
-| get_muted_users | ミュートリスト取得 |
-| get_my_profile | 自分のプロフィール取得 |
-| update_profile | プロフィール更新 |
-| get_relays | リレーリスト取得 |
-| add_relay | リレー追加 |
-| remove_relay | リレー削除 |
+- 詳細構想・ターゲット領域・ブランドストーリーは
+  `repos/private/notes/.agasteer/notes/dev/gilga.md` を参照
+- ファミリープロジェクト: osaka-kenpo（法律）、know-it-break-it（表現）、
+  break-and-shift（確率）
 
 ## ライセンス
 
