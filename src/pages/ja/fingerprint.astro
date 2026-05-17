@@ -1,0 +1,86 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import FingerprintViewer from '@/components/FingerprintViewer.astro';
+---
+
+<Layout
+  title="ブラウザ指紋可視化 — Gilga"
+  description="あなたのブラウザがどれだけ個人特定可能か、Canvas / WebGL / フォント / タイムゾーン等の組み合わせをスコア化。サーバーには一切送りません。"
+  lang="ja"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/ja/" class="flex items-center gap-2 group" aria-label="Gilga トップ">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="ja" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-12 pb-12">
+    <nav class="text-xs text-gray-500 mb-6">
+      <a href="/ja/" class="hover:text-purple-300">トップ</a>
+      <span class="mx-2">/</span>
+      <span class="text-gray-400">ブラウザ指紋可視化</span>
+    </nav>
+
+    <section class="text-center mb-12">
+      <div class="text-5xl mb-4" aria-hidden="true">🕵️</div>
+      <h1
+        class="text-3xl sm:text-4xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        ブラウザ指紋可視化
+      </h1>
+      <p class="text-base text-gray-300 max-w-2xl mx-auto">
+        ログインしていなくても、Cookie を削除しても、あなたのブラウザは
+        <strong class="text-red-400">画面解像度・フォント・GPU・タイムゾーン</strong>
+        などの組み合わせで識別されます。「あなたという端末」が
+        <strong class="text-red-400">どれだけ珍しいか</strong>をスコアで表示します。
+      </p>
+      <p class="text-sm text-gray-500 mt-3 max-w-2xl mx-auto">
+        ボタンを押すまで何も測定しません。結果はサーバーに送らず、保存もしません。
+      </p>
+    </section>
+
+    <FingerprintViewer lang="ja" />
+
+    <section class="mt-16 max-w-2xl mx-auto text-sm text-gray-400 space-y-4">
+      <h2 class="text-base font-semibold text-purple-300">仕組み</h2>
+      <ol class="list-decimal list-inside space-y-2 text-gray-400">
+        <li>
+          ブラウザの <code class="text-purple-300">navigator</code> /
+          <code class="text-purple-300">screen</code> /
+          <code class="text-purple-300">Intl</code> など標準 API から、基本情報を読み取ります。
+        </li>
+        <li>
+          <code class="text-purple-300">&lt;canvas&gt;</code> に絵文字・多言語テキスト・グラデーションを描き、
+          <code class="text-purple-300">toDataURL()</code> を SHA-256 でハッシュ化します。
+          GPU・ドライバ・OS のレンダリング差で、ハッシュが端末ごとに変わります。
+        </li>
+        <li>
+          <code class="text-purple-300">WebGL</code> から GPU ベンダー / レンダラ名を、
+          <code class="text-purple-300">OfflineAudioContext</code> から音声処理経路の微小誤差を取得します。
+        </li>
+        <li>
+          フォントは <code class="text-purple-300">measureText</code>
+          でフォールバックフォントとの幅差を比較し、インストールされているものを推定します。
+        </li>
+        <li>
+          各項目のビット数（情報量）を概算で合計し、<code class="text-purple-300">2^N 人に 1 人</code>
+          としてユニークさを表示します。実際の追跡精度はトラッカー側のデータベース量に依存します。
+        </li>
+      </ol>
+      <p class="text-xs text-gray-500">
+        参考: EFF Cover Your Tracks (旧 Panopticlick) が同じ仕組みを 2010 年代から公開しています。
+        多くのブラウザは指紋がほぼ一意になることが知られています。
+      </p>
+    </section>
+  </main>
+
+  <Footer lang="ja" />
+</Layout>
