@@ -1,0 +1,673 @@
+---
+/**
+ * ExifStripper — クライアント完結の EXIF 解析 / 除去ツール。
+ *
+ * - 画像はブラウザの中だけで処理する。fetch / XHR は使わない
+ * - exifr で EXIF を解析、危険項目（GPS/日時/機種）を赤強調で表示
+ * - Canvas 経由で再エンコードして EXIF を落とす
+ * - 全機能を <script> タグ内で実装（React 等の追加ランタイム不要）
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const copy =
+  lang === 'ja'
+    ? {
+        dropHint: 'ここに画像をドロップ',
+        orChoose: 'またはファイルを選ぶ',
+        clientOnly: 'サーバーに送りません。すべてブラウザの中で処理されます。',
+        analyzing: '解析中…',
+        noExif: 'EXIF データは見つかりませんでした。',
+        noExifSafe: 'この画像には個人情報になる EXIF はありません。安全です。',
+        dangerHeading: '危険な項目',
+        infoHeading: 'その他の項目',
+        showInfo: 'すべての項目を表示',
+        hideInfo: '折りたたむ',
+        download: 'EXIF を除去してダウンロード',
+        downloading: 'エンコード中…',
+        verifyHint:
+          'ダウンロードしたファイルをここにもう一度ドロップすれば、EXIF が消えたことを確認できます。',
+        previewLabel: 'プレビュー',
+        sizeLabel: 'ファイルサイズ',
+        typeLabel: 'ファイル形式',
+        gpsHere: 'この座標を地図で開く',
+        gpsWarn: '撮影場所が特定できます。SNS にそのまま投稿しないでください。',
+        dateWarn: 'いつ撮影したかが分かります。',
+        deviceWarn: '使った機種が分かります。',
+        unsupported:
+          'このブラウザは Canvas / File API に対応していません。最新のブラウザでお試しください。',
+        notImage: '画像ファイルを選んでください。',
+        encodeFail: '再エンコードに失敗しました。',
+        heicUnsupported:
+          'このブラウザでは HEIC を再エンコードできません。設定で JPEG に変えて撮影するか、別ブラウザで開いてください。',
+        imageLoadFail:
+          '画像を読み込めませんでした。ファイルが壊れているか、対応していない形式の可能性があります。',
+        resizedNotice: 'サイズが大きかったため {W}×{H} にリサイズしました。',
+      }
+    : {
+        dropHint: 'Drop image here',
+        orChoose: 'or choose a file',
+        clientOnly:
+          'We never send your file anywhere. Everything happens inside your browser.',
+        analyzing: 'Analyzing…',
+        noExif: 'No EXIF data found.',
+        noExifSafe: 'This image carries no identifying EXIF. You are safe.',
+        dangerHeading: 'Risky fields',
+        infoHeading: 'Other fields',
+        showInfo: 'Show all fields',
+        hideInfo: 'Collapse',
+        download: 'Strip EXIF and download',
+        downloading: 'Encoding…',
+        verifyHint:
+          'Drop the downloaded file back here to verify the EXIF is really gone.',
+        previewLabel: 'Preview',
+        sizeLabel: 'Size',
+        typeLabel: 'Type',
+        gpsHere: 'Open these coordinates on a map',
+        gpsWarn:
+          'These coordinates pinpoint where the photo was taken. Do not post as-is.',
+        dateWarn: 'This reveals when the photo was taken.',
+        deviceWarn: 'This reveals the device that took the photo.',
+        unsupported:
+          'Your browser does not support Canvas / File API. Please try a modern browser.',
+        notImage: 'Please choose an image file.',
+        encodeFail: 'Re-encoding failed.',
+        heicUnsupported:
+          'This browser cannot re-encode HEIC. Switch your camera to JPEG or try a different browser.',
+        imageLoadFail:
+          'Could not load the image. The file may be corrupt or in an unsupported format.',
+        resizedNotice: 'The image was large, so it was resized to {W}×{H}.',
+      };
+---
+
+<section
+  class="w-full max-w-3xl mx-auto"
+  data-exif-stripper
+  data-copy={JSON.stringify(copy)}
+>
+  <p
+    class="text-sm text-purple-300 border border-purple-500/40 bg-purple-500/10 rounded-md px-4 py-3 mb-6 flex items-start gap-2"
+  >
+    <span aria-hidden="true">🛡️</span>
+    <span>{copy.clientOnly}</span>
+  </p>
+
+  <label
+    data-drop-zone
+    class="block border-2 border-dashed border-purple-400/60 hover:border-purple-300 transition-colors rounded-xl bg-gray-900/40 p-10 text-center cursor-pointer focus-within:border-purple-300"
+  >
+    <input type="file" accept="image/*" class="sr-only" data-file-input />
+    <div class="text-5xl mb-3" aria-hidden="true">📷</div>
+    <p class="text-lg text-white mb-1" data-drop-hint>{copy.dropHint}</p>
+    <p class="text-sm text-gray-400">{copy.orChoose}</p>
+  </label>
+
+  <p
+    class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
+    data-error
+  >
+  </p>
+
+  <div class="hidden mt-8" data-result>
+    <div class="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6">
+      <div>
+        <p class="text-xs uppercase tracking-wider text-gray-500 mb-2">
+          {copy.previewLabel}
+        </p>
+        <div class="rounded-lg overflow-hidden border border-gray-800 bg-black">
+          <img
+            data-preview
+            alt={copy.previewLabel}
+            class="w-full h-auto max-h-64 object-contain"
+          />
+        </div>
+        <dl class="mt-3 text-xs text-gray-400 space-y-1">
+          <div class="flex justify-between">
+            <dt>{copy.sizeLabel}</dt>
+            <dd data-file-size class="font-mono"></dd>
+          </div>
+          <div class="flex justify-between">
+            <dt>{copy.typeLabel}</dt>
+            <dd data-file-type class="font-mono"></dd>
+          </div>
+        </dl>
+      </div>
+
+      <div>
+        <p class="hidden text-sm text-gray-500" data-analyzing>
+          {copy.analyzing}
+        </p>
+
+        <p
+          class="hidden text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-md px-4 py-3 mb-4"
+          data-no-exif
+        >
+          {copy.noExifSafe}
+        </p>
+
+        <div class="hidden mb-6" data-danger-section>
+          <h3 class="text-sm font-semibold text-red-400 mb-3 flex items-center gap-2">
+            <span aria-hidden="true">⚠️</span>
+            <span>{copy.dangerHeading}</span>
+          </h3>
+          <ul class="space-y-3" data-danger-list></ul>
+        </div>
+
+        <details class="hidden mb-6" data-info-section>
+          <summary class="cursor-pointer text-sm text-gray-400 hover:text-purple-300">
+            {copy.showInfo}
+          </summary>
+          <ul
+            class="mt-3 text-xs text-gray-400 font-mono space-y-1 max-h-64 overflow-y-auto"
+            data-info-list
+          ></ul>
+        </details>
+
+        <button
+          type="button"
+          data-strip-btn
+          class="hidden w-full md:w-auto px-5 py-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {copy.download}
+        </button>
+
+        <p class="hidden mt-4 text-xs text-gray-500" data-verify-hint>
+          {copy.verifyHint}
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  import exifr from 'exifr';
+
+  type Copy = {
+    dropHint: string;
+    orChoose: string;
+    clientOnly: string;
+    analyzing: string;
+    noExif: string;
+    noExifSafe: string;
+    dangerHeading: string;
+    infoHeading: string;
+    showInfo: string;
+    hideInfo: string;
+    download: string;
+    downloading: string;
+    verifyHint: string;
+    previewLabel: string;
+    sizeLabel: string;
+    typeLabel: string;
+    gpsHere: string;
+    gpsWarn: string;
+    dateWarn: string;
+    deviceWarn: string;
+    unsupported: string;
+    notImage: string;
+    encodeFail: string;
+    heicUnsupported: string;
+    imageLoadFail: string;
+    resizedNotice: string;
+  };
+
+  /** 危険判定対象のキー。GPS は別途まとめて扱う。 */
+  const DANGER_KEYS = new Set<string>([
+    'DateTimeOriginal',
+    'CreateDate',
+    'ModifyDate',
+    'Make',
+    'Model',
+    'LensMake',
+    'LensModel',
+    'SerialNumber',
+    'BodySerialNumber',
+    'OwnerName',
+    'Artist',
+    'Copyright',
+  ]);
+
+  const formatBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const formatValue = (v: unknown): string => {
+    if (v == null) return '';
+    if (v instanceof Date) {
+      // toISOString は UTC 表示なので、日本のユーザーに見せると 9 時間ズレで
+      // 「いつ撮ったか」の警告として誤解を生む。ブラウザロケールで表示する。
+      try {
+        return v.toLocaleString();
+      } catch {
+        return v.toISOString();
+      }
+    }
+    if (Array.isArray(v)) return v.map(formatValue).join(', ');
+    if (typeof v === 'object') {
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return String(v);
+      }
+    }
+    return String(v);
+  };
+
+  /**
+   * GPS 緯度経度を number に正規化する。
+   * - number はそのまま返す
+   * - [deg, min, sec] 配列は度に変換
+   * - ref が 'S' / 'W' なら符号反転
+   * 取れなければ null。
+   */
+  const normalizeGps = (raw: unknown, ref: unknown): number | null => {
+    let deg: number | null = null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      deg = raw;
+    } else if (Array.isArray(raw) && raw.length >= 1) {
+      const d = Number(raw[0]) || 0;
+      const m = raw.length >= 2 ? Number(raw[1]) || 0 : 0;
+      const s = raw.length >= 3 ? Number(raw[2]) || 0 : 0;
+      const v = d + m / 60 + s / 3600;
+      deg = Number.isFinite(v) ? v : null;
+    }
+    if (deg == null) return null;
+    if (typeof ref === 'string') {
+      const r = ref.trim().toUpperCase();
+      if (r === 'S' || r === 'W') deg = -Math.abs(deg);
+      else if (r === 'N' || r === 'E') deg = Math.abs(deg);
+    }
+    return deg;
+  };
+
+  const initOne = (root: HTMLElement): void => {
+    let copy: Copy;
+    try {
+      copy = JSON.parse(root.dataset.copy || '{}') as Copy;
+    } catch {
+      return;
+    }
+
+    const dropZone = root.querySelector<HTMLLabelElement>('[data-drop-zone]');
+    const fileInput = root.querySelector<HTMLInputElement>('[data-file-input]');
+    const errorEl = root.querySelector<HTMLElement>('[data-error]');
+    const resultEl = root.querySelector<HTMLElement>('[data-result]');
+    const previewEl = root.querySelector<HTMLImageElement>('[data-preview]');
+    const fileSizeEl = root.querySelector<HTMLElement>('[data-file-size]');
+    const fileTypeEl = root.querySelector<HTMLElement>('[data-file-type]');
+    const analyzingEl = root.querySelector<HTMLElement>('[data-analyzing]');
+    const noExifEl = root.querySelector<HTMLElement>('[data-no-exif]');
+    const dangerSection = root.querySelector<HTMLElement>('[data-danger-section]');
+    const dangerList = root.querySelector<HTMLElement>('[data-danger-list]');
+    const infoSection = root.querySelector<HTMLElement>('[data-info-section]');
+    const infoList = root.querySelector<HTMLElement>('[data-info-list]');
+    const stripBtn = root.querySelector<HTMLButtonElement>('[data-strip-btn]');
+    const verifyHint = root.querySelector<HTMLElement>('[data-verify-hint]');
+
+    if (
+      !dropZone ||
+      !fileInput ||
+      !errorEl ||
+      !resultEl ||
+      !previewEl ||
+      !fileSizeEl ||
+      !fileTypeEl ||
+      !analyzingEl ||
+      !noExifEl ||
+      !dangerSection ||
+      !dangerList ||
+      !infoSection ||
+      !infoList ||
+      !stripBtn ||
+      !verifyHint
+    ) {
+      return;
+    }
+
+    if (
+      typeof window === 'undefined' ||
+      typeof FileReader === 'undefined' ||
+      typeof HTMLCanvasElement === 'undefined'
+    ) {
+      errorEl.textContent = copy.unsupported;
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    let currentFile: File | null = null;
+    let currentPreviewUrl: string | null = null;
+
+    const showError = (msg: string): void => {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+    };
+
+    const clearError = (): void => {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    };
+
+    const resetUi = (): void => {
+      clearError();
+      resultEl.classList.add('hidden');
+      analyzingEl.classList.add('hidden');
+      noExifEl.classList.add('hidden');
+      dangerSection.classList.add('hidden');
+      infoSection.classList.add('hidden');
+      stripBtn.classList.add('hidden');
+      stripBtn.disabled = true;
+      verifyHint.classList.add('hidden');
+      // 前回のリサイズ通知が残らないよう、元のヒント文に戻す。
+      verifyHint.textContent = copy.verifyHint;
+      dangerList.innerHTML = '';
+      infoList.innerHTML = '';
+    };
+
+    const renderDanger = (
+      label: string,
+      value: string,
+      warn: string,
+      extra?: HTMLElement,
+    ): void => {
+      const li = document.createElement('li');
+      li.className =
+        'border border-red-500/40 bg-red-500/5 rounded-md px-3 py-2';
+      const head = document.createElement('div');
+      head.className = 'flex items-baseline justify-between gap-3';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'text-xs uppercase tracking-wider text-red-300';
+      labelEl.textContent = label;
+      const valueEl = document.createElement('span');
+      valueEl.className = 'text-sm text-white font-mono break-all text-right';
+      valueEl.textContent = value;
+      head.appendChild(labelEl);
+      head.appendChild(valueEl);
+      li.appendChild(head);
+      const warnEl = document.createElement('p');
+      warnEl.className = 'mt-1 text-xs text-red-300/80';
+      warnEl.textContent = warn;
+      li.appendChild(warnEl);
+      if (extra) li.appendChild(extra);
+      dangerList.appendChild(li);
+    };
+
+    const renderInfoRow = (key: string, value: string): void => {
+      const li = document.createElement('li');
+      li.className = 'flex justify-between gap-3 border-b border-gray-800/60 pb-1';
+      const k = document.createElement('span');
+      k.className = 'text-gray-500';
+      k.textContent = key;
+      const v = document.createElement('span');
+      v.className = 'text-gray-300 break-all text-right';
+      v.textContent = value;
+      li.appendChild(k);
+      li.appendChild(v);
+      infoList.appendChild(li);
+    };
+
+    const analyze = async (file: File): Promise<void> => {
+      resetUi();
+
+      if (!file.type.startsWith('image/')) {
+        showError(copy.notImage);
+        return;
+      }
+
+      currentFile = file;
+
+      if (currentPreviewUrl) {
+        URL.revokeObjectURL(currentPreviewUrl);
+        currentPreviewUrl = null;
+      }
+      currentPreviewUrl = URL.createObjectURL(file);
+      previewEl.src = currentPreviewUrl;
+
+      fileSizeEl.textContent = formatBytes(file.size);
+      fileTypeEl.textContent = file.type || '—';
+
+      resultEl.classList.remove('hidden');
+      analyzingEl.classList.remove('hidden');
+
+      // 解析中はボタンを完全に隠し、押せないようにしておく（disabled も付ける）。
+      stripBtn.classList.add('hidden');
+      stripBtn.disabled = true;
+      verifyHint.classList.add('hidden');
+
+      let raw: Record<string, unknown> | undefined;
+      try {
+        raw = (await exifr.parse(file, {
+          tiff: true,
+          xmp: true,
+          icc: false,
+          iptc: true,
+          gps: true,
+          translateKeys: true,
+          translateValues: true,
+          reviveValues: true,
+        })) as Record<string, unknown> | undefined;
+      } catch {
+        raw = undefined;
+      }
+
+      analyzingEl.classList.add('hidden');
+
+      // 解析完了。再エンコードは画像形式さえ読めれば常に可能なのでボタンを出す。
+      stripBtn.disabled = false;
+      stripBtn.classList.remove('hidden');
+      verifyHint.classList.remove('hidden');
+
+      if (!raw || Object.keys(raw).length === 0) {
+        noExifEl.classList.remove('hidden');
+        return;
+      }
+
+      // GPS は専用キーに集約される場合（exifr が変換済み）と、生の
+      // GPSLatitude が [deg, min, sec] 配列で来る場合があるので、両方拾う。
+      const latRaw = raw.latitude ?? raw.GPSLatitude;
+      const lonRaw = raw.longitude ?? raw.GPSLongitude;
+      const lat = normalizeGps(latRaw, raw.GPSLatitudeRef);
+      const lon = normalizeGps(lonRaw, raw.GPSLongitudeRef);
+      let hasDanger = false;
+
+      if (lat != null && lon != null) {
+        hasDanger = true;
+        const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
+        const link = document.createElement('a');
+        link.href = mapsUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.className =
+          'inline-block mt-2 text-xs text-purple-300 underline hover:text-purple-200';
+        link.textContent = copy.gpsHere;
+        renderDanger(
+          'GPS',
+          `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
+          copy.gpsWarn,
+          link,
+        );
+      }
+
+      const dangerKeysSeen = new Set<string>();
+      for (const key of Object.keys(raw)) {
+        if (!DANGER_KEYS.has(key)) continue;
+        const val = raw[key];
+        if (val == null || val === '') continue;
+        dangerKeysSeen.add(key);
+        hasDanger = true;
+        let warn = copy.deviceWarn;
+        if (key === 'DateTimeOriginal' || key === 'CreateDate' || key === 'ModifyDate') {
+          warn = copy.dateWarn;
+        }
+        renderDanger(key, formatValue(val), warn);
+      }
+
+      if (hasDanger) {
+        dangerSection.classList.remove('hidden');
+      }
+
+      // それ以外の項目は折り畳みで全部見せる。
+      const gpsLikeKeys = new Set([
+        'latitude',
+        'longitude',
+        'GPSLatitude',
+        'GPSLongitude',
+        'GPSLatitudeRef',
+        'GPSLongitudeRef',
+      ]);
+      const otherEntries = Object.entries(raw).filter(
+        ([k, v]) =>
+          !DANGER_KEYS.has(k) &&
+          !gpsLikeKeys.has(k) &&
+          v != null &&
+          v !== '',
+      );
+      if (otherEntries.length > 0) {
+        infoSection.classList.remove('hidden');
+        for (const [k, v] of otherEntries) {
+          renderInfoRow(k, formatValue(v));
+        }
+      }
+
+      if (!hasDanger && otherEntries.length === 0) {
+        noExifEl.classList.remove('hidden');
+      }
+    };
+
+    /** モバイル Safari の Canvas 制限 (16MP ≒ 4096x4096) を踏まえ余裕を持って 8192。 */
+    const MAX_DIM = 8192;
+
+    const stripAndDownload = async (): Promise<void> => {
+      if (!currentFile) return;
+
+      // HEIC/HEIF は <img> で decode できないブラウザが大半（Chromium 系全滅）。
+      // try する前に明示的に弾く。
+      const ftype = (currentFile.type || '').toLowerCase();
+      if (ftype === 'image/heic' || ftype === 'image/heif') {
+        showError(copy.heicUnsupported);
+        return;
+      }
+
+      stripBtn.disabled = true;
+      const original = stripBtn.textContent;
+      stripBtn.textContent = copy.downloading;
+
+      try {
+        const url = URL.createObjectURL(currentFile);
+        try {
+          const img = new Image();
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error('image load failed'));
+            img.src = url;
+          });
+
+          // naturalWidth === 0 は decode 失敗のフォールバック（onload は呼ばれることがある）。
+          const naturalW = img.naturalWidth;
+          const naturalH = img.naturalHeight;
+          if (naturalW === 0 || naturalH === 0) {
+            showError(copy.imageLoadFail);
+            return;
+          }
+
+          const longer = Math.max(naturalW, naturalH);
+          const scale = longer > MAX_DIM ? MAX_DIM / longer : 1;
+          const targetW = Math.round(naturalW * scale);
+          const targetH = Math.round(naturalH * scale);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('canvas 2d context unavailable');
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+
+          // リサイズが発生したら verifyHint をリサイズ通知に上書きして気付かせる。
+          if (scale < 1) {
+            const notice = copy.resizedNotice
+              .replace('{W}', String(targetW))
+              .replace('{H}', String(targetH));
+            verifyHint.textContent = notice;
+            verifyHint.classList.remove('hidden');
+          }
+
+          // PNG はロスレスで、JPEG/WebP/その他は jpeg にする。
+          const isPng = ftype.includes('png');
+          const outType = isPng ? 'image/png' : 'image/jpeg';
+          const quality = isPng ? undefined : 0.95;
+
+          const blob: Blob | null = await new Promise((resolve) =>
+            canvas.toBlob(resolve, outType, quality),
+          );
+          if (!blob) throw new Error('toBlob returned null');
+
+          const dlUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const baseName = currentFile.name.replace(/\.[^.]+$/, '') || 'image';
+          const ext = isPng ? 'png' : 'jpg';
+          a.href = dlUrl;
+          a.download = `${baseName}-stripped.${ext}`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(dlUrl), 1000);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      } catch {
+        showError(copy.encodeFail);
+      } finally {
+        stripBtn.disabled = false;
+        if (original) stripBtn.textContent = original;
+      }
+    };
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (file) void analyze(file);
+    });
+
+    // ドラッグオーバーの見た目を変えるだけ。<label> の中に input がある構造のため、
+    // preventDefault だけだと環境によっては click が input に委譲されて
+    // ファイルダイアログが二重に開く。stopPropagation も併用する。
+    ['dragenter', 'dragover'].forEach((type) => {
+      dropZone.addEventListener(type, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add('border-purple-300', 'bg-purple-500/5');
+      });
+    });
+    ['dragleave', 'drop'].forEach((type) => {
+      dropZone.addEventListener(type, () => {
+        dropZone.classList.remove('border-purple-300', 'bg-purple-500/5');
+      });
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const dt = (e as DragEvent).dataTransfer;
+      const file = dt?.files?.[0];
+      if (file) void analyze(file);
+    });
+
+    stripBtn.addEventListener('click', () => {
+      void stripAndDownload();
+    });
+  };
+
+  const init = (): void => {
+    document
+      .querySelectorAll<HTMLElement>('[data-exif-stripper]')
+      .forEach(initOne);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+</script>

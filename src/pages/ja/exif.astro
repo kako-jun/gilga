@@ -1,0 +1,76 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import ExifStripper from '@/components/ExifStripper.astro';
+---
+
+<Layout
+  title="写真メタデータ除去 — Gilga"
+  description="スマホ写真のGPS座標や撮影機種をブラウザ内で解析・除去。サーバーには一切送りません。"
+  lang="ja"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/ja/" class="flex items-center gap-2 group" aria-label="Gilga トップ">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="ja" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-12 pb-12">
+    <nav class="text-xs text-gray-500 mb-6">
+      <a href="/ja/" class="hover:text-purple-300">トップ</a>
+      <span class="mx-2">/</span>
+      <span class="text-gray-400">写真メタデータ除去</span>
+    </nav>
+
+    <section class="text-center mb-12">
+      <div class="text-5xl mb-4" aria-hidden="true">📷</div>
+      <h1
+        class="text-3xl sm:text-4xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        写真メタデータ除去
+      </h1>
+      <p class="text-base text-gray-300 max-w-2xl mx-auto">
+        スマホで撮った写真には、知らないうちに <strong class="text-red-400">GPS 座標</strong> や
+        <strong class="text-red-400">撮影機種</strong>、撮影日時が EXIF として埋め込まれています。
+        SNS にそのまま投稿すれば、自宅や行動範囲が他人に特定されかねません。
+      </p>
+      <p class="text-sm text-gray-500 mt-3 max-w-2xl mx-auto">
+        このページは画像をサーバーに送らず、あなたのブラウザの中だけで解析・除去します。
+      </p>
+    </section>
+
+    <ExifStripper lang="ja" />
+
+    <section class="mt-16 max-w-2xl mx-auto text-sm text-gray-400 space-y-4">
+      <h2 class="text-base font-semibold text-purple-300">仕組み</h2>
+      <ol class="list-decimal list-inside space-y-2 text-gray-400">
+        <li>画像をブラウザのメモリに読み込みます（アップロードしません）。</li>
+        <li>
+          <a
+            href="https://github.com/MikeKovarik/exifr"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-purple-300 underline hover:text-purple-200">exifr</a
+          > で EXIF を解析し、GPS・日時・機種を取り出します。
+        </li>
+        <li>
+          Canvas に再描画して JPEG (PNG はそのまま PNG) に再エンコードすると、EXIF は付きません。
+        </li>
+        <li>除去後のファイルをローカルに保存します。元ファイルには触りません。</li>
+      </ol>
+      <p class="text-xs text-gray-500">
+        注意: 一部の SNS は投稿時に自動で EXIF を落としますが、Discord・Slack
+        などのチャットや、メール添付ではそのまま残ります。
+      </p>
+    </section>
+  </main>
+
+  <Footer lang="ja" />
+</Layout>
