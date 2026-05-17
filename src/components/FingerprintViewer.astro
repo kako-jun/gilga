@@ -48,6 +48,7 @@ const copy =
         scoreVeryUnique: 'ほぼ世界で 1 人',
         scoreRare: 'かなり珍しい',
         scoreCommon: 'よくある構成',
+        beyondWorldPop: '世界人口を超える試算（理論値）',
         sectionBasic: '基本情報',
         sectionScreen: '画面・表示',
         sectionTimezone: 'タイムゾーン',
@@ -87,7 +88,7 @@ const copy =
         defendIntro:
           '指紋を完全にゼロにする方法はありません。下記は「多くの人と同じに見せる」「個別 API を潰す」ためのオプションです。リンクはクリックされるまで通信しません。',
         warningNote:
-          '※ ここで計算したビット数は概算で、実際の追跡精度はトラッカー側のデータベースの大きさに依存します。あくまで「組み合わせがどれだけ珍しいか」の目安です。',
+          '※ ここで計算したビット数は概算で、実際の追跡精度はトラッカー側のデータベースの大きさに依存します。あくまで「組み合わせがどれだけ珍しいか」の目安です。なお、Brave / Tor / Firefox の resistFingerprinting 等で Canvas や AudioContext がランダム化されているブラウザでは、これらの値は測定するたびに変わります。そのため「毎回ユニーク = 防御が効いている」状態でも、本ツール上は「超レア」に見えてしまう仕様上の限界があります。',
       }
     : {
         clientOnly:
@@ -105,6 +106,7 @@ const copy =
         scoreVeryUnique: 'Almost certainly unique on Earth',
         scoreRare: 'Quite rare',
         scoreCommon: 'Common configuration',
+        beyondWorldPop: 'Estimate exceeds world population (theoretical)',
         sectionBasic: 'Basics',
         sectionScreen: 'Screen / Display',
         sectionTimezone: 'Timezone',
@@ -144,7 +146,7 @@ const copy =
         defendIntro:
           'There is no way to drop your fingerprint to zero. The options below either make you look like everyone else, or disable specific APIs. Links do not connect to anything until you click them.',
         warningNote:
-          'Note: the bits shown here are estimates. Real-world tracking accuracy depends on the size of the tracker\'s database. Treat the number as a rough sense of how unusual your combination is.',
+          'Note: the bits shown here are estimates. Real-world tracking accuracy depends on the size of the tracker\'s database. Treat the number as a rough sense of how unusual your combination is. Also, browsers that randomize Canvas / AudioContext (Brave, Tor, Firefox with resistFingerprinting, etc.) will produce different values on every measurement. Even when "always unique = defense is working", this tool will read that as "super rare" — a known limitation.',
       };
 
 // 防御リンク（ユーザーがクリックするまで通信しない）
@@ -280,7 +282,7 @@ const WORLD_POPULATION = 8_000_000_000;
         {copy.scoreHeading}
       </p>
       <p class="text-4xl font-bold text-white mb-2" data-score-bits></p>
-      <p class="text-sm text-gray-300" data-score-oneinn></p>
+      <p class="text-sm text-gray-300" data-score-onein></p>
       <p class="text-[10px] text-gray-500 mt-2" data-score-verdict></p>
     </div>
 
@@ -565,8 +567,14 @@ const WORLD_POPULATION = 8_000_000_000;
   const collectPlugins = (): { plugins: string[]; mimeTypes: string[] } => {
     const plugins: string[] = [];
     const mimeTypes: string[] = [];
+    // intentional use of deprecated API for fingerprinting demo
+    // (deprecation hints are suppressed by treating navigator as a loose record)
+    const nav = navigator as unknown as {
+      plugins?: ArrayLike<{ name?: string }>;
+      mimeTypes?: ArrayLike<{ type?: string }>;
+    };
     try {
-      const pl = navigator.plugins;
+      const pl = nav.plugins;
       if (pl) {
         for (let i = 0; i < pl.length; i++) {
           const p = pl[i];
@@ -577,7 +585,7 @@ const WORLD_POPULATION = 8_000_000_000;
       // ignore
     }
     try {
-      const mt = navigator.mimeTypes;
+      const mt = nav.mimeTypes;
       if (mt) {
         for (let i = 0; i < mt.length; i++) {
           const m = mt[i];
@@ -608,7 +616,7 @@ const WORLD_POPULATION = 8_000_000_000;
     const resultEl = root.querySelector<HTMLElement>('[data-result]');
     const sectionsEl = root.querySelector<HTMLElement>('[data-sections]');
     const scoreBitsEl = root.querySelector<HTMLElement>('[data-score-bits]');
-    const scoreOneInEl = root.querySelector<HTMLElement>('[data-score-oneinn]');
+    const scoreOneInEl = root.querySelector<HTMLElement>('[data-score-onein]');
     const scoreVerdictEl = root.querySelector<HTMLElement>('[data-score-verdict]');
 
     if (
@@ -674,13 +682,15 @@ const WORLD_POPULATION = 8_000_000_000;
 
     const runMeasurement = async (): Promise<void> => {
       measureBtn.disabled = true;
-      const originalLabel = measureBtn.textContent;
+      const originalLabel = measureBtn.textContent ?? copy.measure;
       measureBtn.textContent = copy.measuring;
 
       try {
         // 1. 基本
         const ua = navigator.userAgent || '';
-        const platform = navigator.platform || '';
+        // navigator.platform is deprecated but still useful for fingerprinting
+        const platform =
+          (navigator as unknown as { platform?: string }).platform || '';
         const langs = (navigator.languages || [navigator.language || '']).join(
           ',',
         );
@@ -755,10 +765,16 @@ const WORLD_POPULATION = 8_000_000_000;
           '{N}',
           cappedBits.toFixed(1),
         );
-        scoreOneInEl.textContent = copy.scoreOneIn.replace(
-          '{N}',
-          formatNumber(oneIn),
-        );
+        // ベリーユニーク帯では 2^cappedBits が世界人口を超えるため、
+        // 「1 in 8.00B」と数字を出すと不整合になる。専用文言に切り替える。
+        if (cappedBits >= 33) {
+          scoreOneInEl.textContent = copy.beyondWorldPop;
+        } else {
+          scoreOneInEl.textContent = copy.scoreOneIn.replace(
+            '{N}',
+            formatNumber(oneIn),
+          );
+        }
 
         // 判定文（cappedBits の絶対値で 3 段階）
         let verdict = copy.scoreCommon;
