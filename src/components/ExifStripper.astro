@@ -41,6 +41,11 @@ const copy =
           'このブラウザは Canvas / File API に対応していません。最新のブラウザでお試しください。',
         notImage: '画像ファイルを選んでください。',
         encodeFail: '再エンコードに失敗しました。',
+        heicUnsupported:
+          'このブラウザでは HEIC を再エンコードできません。設定で JPEG に変えて撮影するか、別ブラウザで開いてください。',
+        imageLoadFail:
+          '画像を読み込めませんでした。ファイルが壊れているか、対応していない形式の可能性があります。',
+        resizedNotice: 'サイズが大きかったため {W}×{H} にリサイズしました。',
       }
     : {
         dropHint: 'Drop image here',
@@ -70,6 +75,11 @@ const copy =
           'Your browser does not support Canvas / File API. Please try a modern browser.',
         notImage: 'Please choose an image file.',
         encodeFail: 'Re-encoding failed.',
+        heicUnsupported:
+          'This browser cannot re-encode HEIC. Switch your camera to JPEG or try a different browser.',
+        imageLoadFail:
+          'Could not load the image. The file may be corrupt or in an unsupported format.',
+        resizedNotice: 'The image was large, so it was resized to {W}×{H}.',
       };
 ---
 
@@ -199,6 +209,9 @@ const copy =
     unsupported: string;
     notImage: string;
     encodeFail: string;
+    heicUnsupported: string;
+    imageLoadFail: string;
+    resizedNotice: string;
   };
 
   /** 危険判定対象のキー。GPS は別途まとめて扱う。 */
@@ -225,7 +238,15 @@ const copy =
 
   const formatValue = (v: unknown): string => {
     if (v == null) return '';
-    if (v instanceof Date) return v.toISOString();
+    if (v instanceof Date) {
+      // toISOString は UTC 表示なので、日本のユーザーに見せると 9 時間ズレで
+      // 「いつ撮ったか」の警告として誤解を生む。ブラウザロケールで表示する。
+      try {
+        return v.toLocaleString();
+      } catch {
+        return v.toISOString();
+      }
+    }
     if (Array.isArray(v)) return v.map(formatValue).join(', ');
     if (typeof v === 'object') {
       try {
@@ -235,6 +256,33 @@ const copy =
       }
     }
     return String(v);
+  };
+
+  /**
+   * GPS 緯度経度を number に正規化する。
+   * - number はそのまま返す
+   * - [deg, min, sec] 配列は度に変換
+   * - ref が 'S' / 'W' なら符号反転
+   * 取れなければ null。
+   */
+  const normalizeGps = (raw: unknown, ref: unknown): number | null => {
+    let deg: number | null = null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      deg = raw;
+    } else if (Array.isArray(raw) && raw.length >= 1) {
+      const d = Number(raw[0]) || 0;
+      const m = raw.length >= 2 ? Number(raw[1]) || 0 : 0;
+      const s = raw.length >= 3 ? Number(raw[2]) || 0 : 0;
+      const v = d + m / 60 + s / 3600;
+      deg = Number.isFinite(v) ? v : null;
+    }
+    if (deg == null) return null;
+    if (typeof ref === 'string') {
+      const r = ref.trim().toUpperCase();
+      if (r === 'S' || r === 'W') deg = -Math.abs(deg);
+      else if (r === 'N' || r === 'E') deg = Math.abs(deg);
+    }
+    return deg;
   };
 
   const initOne = (root: HTMLElement): void => {
@@ -312,7 +360,10 @@ const copy =
       dangerSection.classList.add('hidden');
       infoSection.classList.add('hidden');
       stripBtn.classList.add('hidden');
+      stripBtn.disabled = true;
       verifyHint.classList.add('hidden');
+      // 前回のリサイズ通知が残らないよう、元のヒント文に戻す。
+      verifyHint.textContent = copy.verifyHint;
       dangerList.innerHTML = '';
       infoList.innerHTML = '';
     };
@@ -382,9 +433,10 @@ const copy =
       resultEl.classList.remove('hidden');
       analyzingEl.classList.remove('hidden');
 
-      // 再エンコードは画像形式さえ読めれば常に可能なので、まずボタンを出しておく。
-      stripBtn.classList.remove('hidden');
-      verifyHint.classList.remove('hidden');
+      // 解析中はボタンを完全に隠し、押せないようにしておく（disabled も付ける）。
+      stripBtn.classList.add('hidden');
+      stripBtn.disabled = true;
+      verifyHint.classList.add('hidden');
 
       let raw: Record<string, unknown> | undefined;
       try {
@@ -404,17 +456,25 @@ const copy =
 
       analyzingEl.classList.add('hidden');
 
+      // 解析完了。再エンコードは画像形式さえ読めれば常に可能なのでボタンを出す。
+      stripBtn.disabled = false;
+      stripBtn.classList.remove('hidden');
+      verifyHint.classList.remove('hidden');
+
       if (!raw || Object.keys(raw).length === 0) {
         noExifEl.classList.remove('hidden');
         return;
       }
 
-      // GPS は専用キーに集約されるので個別チェック。
-      const lat = raw.latitude ?? raw.GPSLatitude;
-      const lon = raw.longitude ?? raw.GPSLongitude;
+      // GPS は専用キーに集約される場合（exifr が変換済み）と、生の
+      // GPSLatitude が [deg, min, sec] 配列で来る場合があるので、両方拾う。
+      const latRaw = raw.latitude ?? raw.GPSLatitude;
+      const lonRaw = raw.longitude ?? raw.GPSLongitude;
+      const lat = normalizeGps(latRaw, raw.GPSLatitudeRef);
+      const lon = normalizeGps(lonRaw, raw.GPSLongitudeRef);
       let hasDanger = false;
 
-      if (typeof lat === 'number' && typeof lon === 'number') {
+      if (lat != null && lon != null) {
         hasDanger = true;
         const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
         const link = document.createElement('a');
@@ -478,8 +538,20 @@ const copy =
       }
     };
 
+    /** モバイル Safari の Canvas 制限 (16MP ≒ 4096x4096) を踏まえ余裕を持って 8192。 */
+    const MAX_DIM = 8192;
+
     const stripAndDownload = async (): Promise<void> => {
       if (!currentFile) return;
+
+      // HEIC/HEIF は <img> で decode できないブラウザが大半（Chromium 系全滅）。
+      // try する前に明示的に弾く。
+      const ftype = (currentFile.type || '').toLowerCase();
+      if (ftype === 'image/heic' || ftype === 'image/heif') {
+        showError(copy.heicUnsupported);
+        return;
+      }
+
       stripBtn.disabled = true;
       const original = stripBtn.textContent;
       stripBtn.textContent = copy.downloading;
@@ -494,15 +566,37 @@ const copy =
             img.src = url;
           });
 
+          // naturalWidth === 0 は decode 失敗のフォールバック（onload は呼ばれることがある）。
+          const naturalW = img.naturalWidth;
+          const naturalH = img.naturalHeight;
+          if (naturalW === 0 || naturalH === 0) {
+            showError(copy.imageLoadFail);
+            return;
+          }
+
+          const longer = Math.max(naturalW, naturalH);
+          const scale = longer > MAX_DIM ? MAX_DIM / longer : 1;
+          const targetW = Math.round(naturalW * scale);
+          const targetH = Math.round(naturalH * scale);
+
           const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
+          canvas.width = targetW;
+          canvas.height = targetH;
           const ctx = canvas.getContext('2d');
           if (!ctx) throw new Error('canvas 2d context unavailable');
-          ctx.drawImage(img, 0, 0);
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+
+          // リサイズが発生したら verifyHint をリサイズ通知に上書きして気付かせる。
+          if (scale < 1) {
+            const notice = copy.resizedNotice
+              .replace('{W}', String(targetW))
+              .replace('{H}', String(targetH));
+            verifyHint.textContent = notice;
+            verifyHint.classList.remove('hidden');
+          }
 
           // PNG はロスレスで、JPEG/WebP/その他は jpeg にする。
-          const isPng = (currentFile.type || '').toLowerCase().includes('png');
+          const isPng = ftype.includes('png');
           const outType = isPng ? 'image/png' : 'image/jpeg';
           const quality = isPng ? undefined : 0.95;
 
@@ -537,11 +631,13 @@ const copy =
       if (file) void analyze(file);
     });
 
-    // ドラッグオーバーの見た目を変えるだけ。本体の drop は label にもデフォルトで来るが、
-    // input のクリックを誤発火させないように preventDefault する。
+    // ドラッグオーバーの見た目を変えるだけ。<label> の中に input がある構造のため、
+    // preventDefault だけだと環境によっては click が input に委譲されて
+    // ファイルダイアログが二重に開く。stopPropagation も併用する。
     ['dragenter', 'dragover'].forEach((type) => {
       dropZone.addEventListener(type, (e) => {
         e.preventDefault();
+        e.stopPropagation();
         dropZone.classList.add('border-purple-300', 'bg-purple-500/5');
       });
     });
@@ -552,6 +648,7 @@ const copy =
     });
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       const dt = (e as DragEvent).dataTransfer;
       const file = dt?.files?.[0];
       if (file) void analyze(file);
