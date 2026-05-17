@@ -1,0 +1,82 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import TrackerDetector from '@/components/TrackerDetector.astro';
+---
+
+<Layout
+  title="トラッキングピクセル検出 — Gilga"
+  description="メールHTMLに埋め込まれた追跡ピクセルをブラウザ内で検出。「このメール、開いたのバレてます」を可視化。サーバーには一切送りません。"
+  lang="ja"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/ja/" class="flex items-center gap-2 group" aria-label="Gilga トップ">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="ja" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-12 pb-12">
+    <nav class="text-xs text-gray-500 mb-6">
+      <a href="/ja/" class="hover:text-purple-300">トップ</a>
+      <span class="mx-2">/</span>
+      <span class="text-gray-400">トラッキングピクセル検出</span>
+    </nav>
+
+    <section class="text-center mb-12">
+      <div class="text-5xl mb-4" aria-hidden="true">👁️</div>
+      <h1
+        class="text-3xl sm:text-4xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        トラッキングピクセル検出
+      </h1>
+      <p class="text-base text-gray-300 max-w-2xl mx-auto">
+        企業のメールマガジンには、ほぼ確実に
+        <strong class="text-red-400">1×1 ピクセルの透明な画像</strong>が仕込まれています。
+        メールを開いた瞬間に、その画像が読み込まれ、
+        <strong class="text-red-400">「開封しました」が相手のサーバーに通知</strong>されます。
+      </p>
+      <p class="text-sm text-gray-500 mt-3 max-w-2xl mx-auto">
+        このページはメールの HTML をサーバーに送らず、あなたのブラウザの中だけで解析します。
+      </p>
+    </section>
+
+    <TrackerDetector lang="ja" />
+
+    <section class="mt-16 max-w-2xl mx-auto text-sm text-gray-400 space-y-4">
+      <h2 class="text-base font-semibold text-purple-300">仕組み</h2>
+      <ol class="list-decimal list-inside space-y-2 text-gray-400">
+        <li>
+          メールクライアントで「ソースを表示」してコピーした HTML を、テキストエリアに貼り付けます。
+        </li>
+        <li>
+          ブラウザの <code class="text-purple-300">DOMParser</code> で HTML を解析し、
+          すべての <code class="text-purple-300">&lt;img&gt;</code> タグを抜き出します。
+        </li>
+        <li>
+          各画像の URL のホスト名を、既知の配信サービス（Mailchimp / HubSpot / SendGrid 等）と
+          照合します。さらに 1×1 ピクセルや <code class="text-purple-300">display:none</code>
+          で隠された画像も追跡候補として表示します。
+        </li>
+        <li>
+          <code class="text-purple-300">&lt;style&gt;</code> タグ内の
+          <code class="text-purple-300">url()</code> も簡易チェックします。
+          画像はリンク先を取得しません（リクエストは送りません）。
+        </li>
+      </ol>
+      <p class="text-xs text-gray-500">
+        注意: トラッキングピクセルの仕組みは合法で、ほとんどのマーケティングメールが使っています。
+        対策としては「メールクライアントで画像の自動読み込みをオフにする」が最も簡単です
+        （Apple Mail Privacy Protection、Gmail のプロキシ経由表示など）。
+      </p>
+    </section>
+  </main>
+
+  <Footer lang="ja" />
+</Layout>
