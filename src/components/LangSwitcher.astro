@@ -1,0 +1,55 @@
+---
+/**
+ * LangSwitcher — JA / EN 切り替え。
+ * 現在の URL から locale 部分だけ差し替えるので、ツール詳細ページからでも
+ * 対になるロケールの同一パスへ飛べる。
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const path = Astro.url.pathname;
+const stripped = path.replace(/^\/(ja|en)(\/|$)/, '/');
+
+const hrefFor = (code: 'ja' | 'en'): string => {
+  if (stripped === '/' || stripped === '') return `/${code}/`;
+  const base = stripped.startsWith('/') ? stripped : `/${stripped}`;
+  return `/${code}${base}`;
+};
+
+const links: Array<{ code: 'ja' | 'en'; label: string }> = [
+  { code: 'ja', label: 'JA' },
+  { code: 'en', label: 'EN' },
+];
+---
+
+<nav
+  class="flex items-center gap-1 text-sm font-mono"
+  aria-label={lang === 'ja' ? '言語切り替え' : 'Language switcher'}
+>
+  {
+    links.map((link, i) => (
+      <>
+        {i > 0 && <span class="text-gray-600" aria-hidden="true">/</span>}
+        {link.code === lang ? (
+          <span
+            class="px-2 py-1 text-purple-400 font-semibold"
+            aria-current="true"
+          >
+            {link.label}
+          </span>
+        ) : (
+          <a
+            href={hrefFor(link.code)}
+            class="px-2 py-1 text-gray-400 hover:text-purple-300 transition-colors"
+            hreflang={link.code}
+          >
+            {link.label}
+          </a>
+        )}
+      </>
+    ))
+  }
+</nav>

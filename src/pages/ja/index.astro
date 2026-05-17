@@ -1,11 +1,64 @@
 ---
 import Layout from '@/layouts/Layout.astro';
+import ToolCard from '@/components/ToolCard.astro';
+import LangSwitcher from '@/components/LangSwitcher.astro';
+import Footer from '@/components/Footer.astro';
+import { getToolCards } from '@/data/tools';
+
+const cards = getToolCards('ja');
 ---
 
-<Layout title="Gilga — 悪意から弱い人を守る義賊" lang="ja">
-  <main class="max-w-2xl mx-auto px-6 py-24">
-    <h1 class="text-4xl font-bold mb-6">Gilga</h1>
-    <p class="text-lg mb-4">悪意から弱い人を守る義賊。</p>
-    <p class="text-sm text-gray-400">準備中。</p>
+<Layout
+  title="Gilga — 悪意を舐めて見破る舌"
+  description="知識の非対称で搾取される人を、技術で救う義賊。複数のクライアント完結ツールを無料で。"
+  lang="ja"
+>
+  <header class="max-w-5xl w-full mx-auto px-6 pt-6 flex items-center justify-between">
+    <a href="/ja/" class="flex items-center gap-2 group" aria-label="Gilga トップ">
+      <span class="text-2xl" aria-hidden="true">👅</span>
+      <span
+        class="text-xl font-bold tracking-wider text-white group-hover:text-purple-300 transition-colors"
+      >
+        Gilga
+      </span>
+    </a>
+    <LangSwitcher lang="ja" />
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-6 pt-16 pb-12">
+    <section class="text-center mb-16">
+      <h1
+        class="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-purple-300 via-white to-purple-300 bg-clip-text text-transparent"
+      >
+        悪意を舐めて見破る舌
+      </h1>
+      <p class="text-lg text-gray-300 mb-2">
+        知識の非対称で搾取される人を、技術で救う義賊。
+      </p>
+      <p class="text-sm text-gray-500">
+        どれもブラウザの中で動きます。あなたのデータはサーバーに送りません。
+      </p>
+    </section>
+
+    <section aria-label="ツール一覧">
+      <h2 class="sr-only">ツール一覧</h2>
+      <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        {
+          cards.map((card) => (
+            <li>
+              <ToolCard
+                icon={card.icon}
+                title={card.title}
+                description={card.description}
+                href={card.href}
+                comingSoonLabel={card.status === 'coming-soon' ? '準備中' : undefined}
+              />
+            </li>
+          ))
+        }
+      </ul>
+    </section>
   </main>
+
+  <Footer lang="ja" />
 </Layout>
