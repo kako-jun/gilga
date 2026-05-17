@@ -12,15 +12,15 @@ const { lang } = Astro.props;
 const copy =
   lang === 'ja'
     ? {
-        principle: 'UGCなし・サーバーに送らない設計',
+        principle: 'UGCなし・あなたのデータは持ち出さない設計',
         principleDetail:
-          'あなたの写真・URL・メールは、原則ブラウザの中だけで処理されます。',
+          '写真・メール・指紋情報はブラウザの中だけで処理されます。短縮URL展開だけは Workers 経由で URL ヘッダーを辿りますが、ページ内容は取得しません。',
         author: 'kako-jun',
       }
     : {
-        principle: 'No UGC. Nothing sent to a server.',
+        principle: 'No UGC. We do not take your data off your device.',
         principleDetail:
-          'Your photos, URLs and emails are processed inside your browser whenever possible.',
+          'Photos, emails and fingerprint data are processed entirely in your browser. Only the URL unshortener follows redirect headers via Cloudflare Workers — we never fetch the page body.',
         author: 'kako-jun',
       };
 

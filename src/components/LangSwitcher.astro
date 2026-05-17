@@ -1,7 +1,8 @@
 ---
 /**
  * LangSwitcher — JA / EN 切り替え。
- * 現在のロケールを受け取り、対のロケールのトップへリンクする。
+ * 現在の URL から locale 部分だけ差し替えるので、ツール詳細ページからでも
+ * 対になるロケールの同一パスへ飛べる。
  */
 interface Props {
   lang: 'ja' | 'en';
@@ -9,9 +10,18 @@ interface Props {
 
 const { lang } = Astro.props;
 
-const links: Array<{ code: 'ja' | 'en'; label: string; href: string }> = [
-  { code: 'ja', label: 'JA', href: '/ja/' },
-  { code: 'en', label: 'EN', href: '/en/' },
+const path = Astro.url.pathname;
+const stripped = path.replace(/^\/(ja|en)(\/|$)/, '/');
+
+const hrefFor = (code: 'ja' | 'en'): string => {
+  if (stripped === '/' || stripped === '') return `/${code}/`;
+  const base = stripped.startsWith('/') ? stripped : `/${stripped}`;
+  return `/${code}${base}`;
+};
+
+const links: Array<{ code: 'ja' | 'en'; label: string }> = [
+  { code: 'ja', label: 'JA' },
+  { code: 'en', label: 'EN' },
 ];
 ---
 
@@ -32,7 +42,7 @@ const links: Array<{ code: 'ja' | 'en'; label: string; href: string }> = [
           </span>
         ) : (
           <a
-            href={link.href}
+            href={hrefFor(link.code)}
             class="px-2 py-1 text-gray-400 hover:text-purple-300 transition-colors"
             hreflang={link.code}
           >
