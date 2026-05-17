@@ -233,6 +233,7 @@ const SAMPLE_HTML = `<!DOCTYPE html>
       data-html-input
       rows="10"
       placeholder={copy.textareaPlaceholder}
+      aria-describedby="tracker-error"
       class="w-full bg-gray-900/60 border border-gray-700 focus:border-purple-400 focus:outline-none rounded-lg px-3 py-2 font-mono text-xs text-gray-200 placeholder-gray-600 resize-y min-h-[180px]"
     ></textarea>
   </label>
@@ -269,12 +270,14 @@ const SAMPLE_HTML = `<!DOCTYPE html>
   </div>
 
   <p
+    id="tracker-error"
     class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
     data-error
+    role="alert"
   >
   </p>
 
-  <div class="hidden mt-8" data-result>
+  <div class="hidden mt-8" data-result aria-live="polite">
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6" data-summary></div>
 
     <div class="hidden mb-8" data-no-findings>
