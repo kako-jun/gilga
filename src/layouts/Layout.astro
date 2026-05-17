@@ -1,0 +1,26 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+  lang?: 'ja' | 'en';
+}
+
+const {
+  title,
+  description = '悪意から弱い人を守る義賊 — Gilga',
+  lang = 'ja',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+  </head>
+  <body class="bg-black text-white min-h-screen">
+    <slot />
+  </body>
+</html>
