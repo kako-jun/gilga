@@ -1,0 +1,17 @@
+name = "gilga-unshorten"
+main = "src/index.ts"
+compatibility_date = "2026-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# プロダクションでは gilga.llll-ll.com/api/unshorten にルーティングする想定。
+# 実デプロイ時に下の routes を有効化してから `wrangler deploy` する。
+#
+# [[routes]]
+# pattern = "gilga.llll-ll.com/api/unshorten"
+# zone_name = "llll-ll.com"
+
+# 観察用ログ（フルURLは残さない設計、index.ts 側でホストのみ console.log）
+[observability]
+enabled = true
+
+# rate limit / KV を入れる場合はここに [[unsafe.bindings]] を後で追加する。
