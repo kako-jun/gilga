@@ -1,0 +1,661 @@
+---
+/**
+ * UrlUnshortener — 短縮 URL 正体暴きツール（gilga 唯一のサーバー処理ツール）。
+ *
+ * - 入力された URL を `/api/unshorten?url=...` の Cloudflare Worker に渡す
+ * - Worker が redirect chain を辿り、各 hop の hostname / status を返す
+ * - 別ドメインへの遷移を赤強調、最終 URL を「自己責任で開く」リンクで表示
+ * - dev では `astro.config.mjs` の vite proxy で localhost:8787 に転送される想定
+ */
+interface Props {
+  lang: 'ja' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const copy =
+  lang === 'ja'
+    ? {
+        endpointNote:
+          'このツールだけは Cloudflare Workers 経由で URL を辿ります（ヘッダのみ取得、ページ本文は読みません）。',
+        privacyNote:
+          '送信される情報: あなたが貼り付けた URL のみ。Workers のログにはホスト名だけが残り、フル URL は記録しません。',
+        inputLabel: '短縮 URL を貼り付け',
+        inputPlaceholder: 'https://bit.ly/xxxxxx',
+        analyze: '展開する',
+        analyzing: '展開中...',
+        clear: 'クリア',
+        loadSample: 'サンプル URL を試す',
+        emptyInput: 'URL を入力してください。',
+        invalidUrl: 'URL の形式が正しくありません。',
+        urlTooLong: 'URL が長すぎます（2048 文字以下）。',
+        clipboardError:
+          'クリップボードから読み取れませんでした。手で貼り付けてください。',
+        pasteFromClipboard: 'クリップボードから貼り付け',
+        errorPrefix: 'エラー',
+        errorInvalidScheme: 'http / https の URL のみ展開できます。',
+        errorForbiddenTarget:
+          'localhost や内部 IP の URL は展開できません（SSRF 対策）。',
+        errorTooManyRedirects:
+          'リダイレクトが多すぎます（10 hop 超過）。リダイレクトループの可能性があります。',
+        errorTimeout:
+          'タイムアウトしました。サーバーが応答しないか、極端に遅いです。',
+        errorFetchFailed:
+          '取得に失敗しました。URL が存在しないか、サーバーが応答していません。',
+        errorRateLimit:
+          'リクエストが多すぎます。しばらく待ってからもう一度試してください。',
+        errorGeneric: '不明なエラーが発生しました。',
+        summaryRedirects: 'リダイレクト: {N} 回',
+        summaryFinalHost: '最終ドメイン: {HOST}',
+        summaryTruncated: '※ hop 数上限で打ち切られています',
+        hopsHeading: '辿った経路',
+        hopBadgeRedirect: 'リダイレクト',
+        hopBadgeFinal: '最終',
+        hopBadgeError: 'エラー',
+        hopDomainChange: 'ドメインが変わりました',
+        finalHeading: '最終的にあなたが開くページ',
+        finalDomain: '最終ドメイン',
+        finalRedirectCount: 'リダイレクト回数',
+        openWarning:
+          '注意: クリックすると新しいタブで開きます。中身は事前に確認できていません。',
+        openLink: 'このリンクを開く（自己責任）',
+        copyLink: 'URL をコピー',
+        copied: 'コピーしました',
+      }
+    : {
+        endpointNote:
+          'This is the only tool that talks to a server. Cloudflare Workers follows redirect headers — we never download the page body.',
+        privacyNote:
+          'We only send the URL you pasted. The Workers log records the hostname only — full URLs are never persisted.',
+        inputLabel: 'Paste a shortened URL',
+        inputPlaceholder: 'https://bit.ly/xxxxxx',
+        analyze: 'Unshorten',
+        analyzing: 'Unshortening...',
+        clear: 'Clear',
+        loadSample: 'Try a sample URL',
+        emptyInput: 'Please enter a URL.',
+        invalidUrl: 'That does not look like a valid URL.',
+        urlTooLong: 'URL is too long (must be 2048 chars or less).',
+        clipboardError:
+          'Could not read the clipboard. Please paste manually.',
+        pasteFromClipboard: 'Paste from clipboard',
+        errorPrefix: 'Error',
+        errorInvalidScheme: 'Only http and https URLs can be unshortened.',
+        errorForbiddenTarget:
+          'localhost and internal IPs are blocked (SSRF protection).',
+        errorTooManyRedirects:
+          'Too many redirects (over 10 hops). The URL may be in a redirect loop.',
+        errorTimeout: 'Timed out. The server is unresponsive or extremely slow.',
+        errorFetchFailed:
+          'Fetch failed. The URL may not exist or the server is offline.',
+        errorRateLimit:
+          'Too many requests. Please wait a moment and try again.',
+        errorGeneric: 'An unknown error occurred.',
+        summaryRedirects: 'Redirects: {N}',
+        summaryFinalHost: 'Final domain: {HOST}',
+        summaryTruncated: '(truncated at max hops)',
+        hopsHeading: 'Redirect chain',
+        hopBadgeRedirect: 'REDIRECT',
+        hopBadgeFinal: 'FINAL',
+        hopBadgeError: 'ERROR',
+        hopDomainChange: 'Domain changed',
+        finalHeading: 'Where this link actually takes you',
+        finalDomain: 'Final domain',
+        finalRedirectCount: 'Redirect count',
+        openWarning:
+          'Warning: clicking opens a new tab. We have not verified the contents.',
+        openLink: 'Open the link (at your own risk)',
+        copyLink: 'Copy URL',
+        copied: 'Copied',
+      };
+
+// サンプル URL（実害が無く、確実にリダイレクトする HTTP の典型例）
+// httpbin の redirect エンドポイント。3 hop で最終的に /get へ行く。
+const SAMPLE_URL = 'https://httpbin.org/redirect/3';
+---
+
+<section
+  class="w-full max-w-3xl mx-auto"
+  data-url-unshortener
+  data-copy={JSON.stringify(copy)}
+  data-sample={SAMPLE_URL}
+  data-endpoint="/api/unshorten"
+>
+  <p
+    class="text-sm text-purple-300 border border-purple-500/40 bg-purple-500/10 rounded-md px-4 py-3 mb-3 flex items-start gap-2"
+  >
+    <span aria-hidden="true">🛡️</span>
+    <span>{copy.endpointNote}</span>
+  </p>
+  <p class="text-xs text-gray-500 mb-6">{copy.privacyNote}</p>
+
+  <label class="block">
+    <span class="block text-sm text-gray-300 mb-2">{copy.inputLabel}</span>
+    <input
+      data-url-input
+      type="url"
+      inputmode="url"
+      autocomplete="off"
+      spellcheck="false"
+      maxlength="2048"
+      placeholder={copy.inputPlaceholder}
+      aria-describedby="unshorten-error"
+      class="w-full bg-gray-900/60 border border-gray-700 focus:border-purple-400 focus:outline-none rounded-lg px-3 py-2 font-mono text-sm text-gray-200 placeholder-gray-600"
+    />
+  </label>
+
+  <div class="mt-3 flex flex-wrap gap-2">
+    <button
+      type="button"
+      data-analyze-btn
+      class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 disabled:opacity-60 disabled:cursor-not-allowed"
+    >
+      {copy.analyze}
+    </button>
+    <button
+      type="button"
+      data-paste-btn
+      class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors"
+    >
+      {copy.pasteFromClipboard}
+    </button>
+    <button
+      type="button"
+      data-sample-btn
+      class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors"
+    >
+      {copy.loadSample}
+    </button>
+    <button
+      type="button"
+      data-clear-btn
+      class="px-4 py-2 rounded-lg bg-transparent hover:bg-gray-800 border border-gray-700 text-gray-400 transition-colors ml-auto"
+    >
+      {copy.clear}
+    </button>
+  </div>
+
+  <p
+    id="unshorten-error"
+    class="hidden mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/40 rounded-md px-4 py-2"
+    data-error
+    role="alert"
+  >
+  </p>
+
+  <div class="hidden mt-8" data-result aria-live="polite">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6" data-summary></div>
+
+    <div class="mb-8" data-final-section>
+      <h3
+        class="text-sm font-semibold text-emerald-300 mb-3 flex items-center gap-2"
+      >
+        <span aria-hidden="true">🎯</span>
+        <span>{copy.finalHeading}</span>
+      </h3>
+      <div
+        class="border border-emerald-500/40 bg-emerald-500/5 rounded-lg px-4 py-4"
+        data-final-card
+      >
+      </div>
+    </div>
+
+    <div class="mb-8" data-hops-section>
+      <h3 class="text-sm font-semibold text-purple-300 mb-3 flex items-center gap-2">
+        <span aria-hidden="true">🪜</span>
+        <span>{copy.hopsHeading}</span>
+      </h3>
+      <ol class="space-y-2" data-hops-list></ol>
+    </div>
+  </div>
+</section>
+
+<script>
+  type Copy = {
+    endpointNote: string;
+    privacyNote: string;
+    inputLabel: string;
+    inputPlaceholder: string;
+    analyze: string;
+    analyzing: string;
+    clear: string;
+    loadSample: string;
+    emptyInput: string;
+    invalidUrl: string;
+    urlTooLong: string;
+    clipboardError: string;
+    pasteFromClipboard: string;
+    errorPrefix: string;
+    errorInvalidScheme: string;
+    errorForbiddenTarget: string;
+    errorTooManyRedirects: string;
+    errorTimeout: string;
+    errorFetchFailed: string;
+    errorRateLimit: string;
+    errorGeneric: string;
+    summaryRedirects: string;
+    summaryFinalHost: string;
+    summaryTruncated: string;
+    hopsHeading: string;
+    hopBadgeRedirect: string;
+    hopBadgeFinal: string;
+    hopBadgeError: string;
+    hopDomainChange: string;
+    finalHeading: string;
+    finalDomain: string;
+    finalRedirectCount: string;
+    openWarning: string;
+    openLink: string;
+    copyLink: string;
+    copied: string;
+  };
+
+  type HopRecord = {
+    url: string;
+    status: number;
+    location?: string;
+    hopIndex: number;
+    hostname: string;
+  };
+
+  type SuccessResponse = {
+    ok: true;
+    hops: HopRecord[];
+    finalUrl: string;
+    finalHostname: string;
+    redirectCount: number;
+    truncated: boolean;
+  };
+
+  type ErrorResponse = {
+    ok: false;
+    error:
+      | 'invalid_url'
+      | 'too_many_redirects'
+      | 'fetch_failed'
+      | 'invalid_scheme'
+      | 'timeout'
+      | 'rate_limit'
+      | 'forbidden_target'
+      | 'url_too_long'
+      | 'method_not_allowed'
+      | 'missing_url'
+      | 'not_found';
+    message: string;
+  };
+
+  type Response_ = SuccessResponse | ErrorResponse;
+
+  /** ホストの登録ドメイン（雑に最後の 2 ラベル）。完全な PSL ではないが UI 用途には十分。 */
+  const registrableDomain = (host: string): string => {
+    const parts = host.toLowerCase().split('.').filter(Boolean);
+    if (parts.length <= 2) return parts.join('.');
+    return parts.slice(-2).join('.');
+  };
+
+  /** Worker のエラーコードを UI 文言にマップ。 */
+  const errorMessage = (err: ErrorResponse, copy: Copy): string => {
+    switch (err.error) {
+      case 'invalid_url':
+        return copy.invalidUrl;
+      case 'invalid_scheme':
+        return copy.errorInvalidScheme;
+      case 'forbidden_target':
+        return copy.errorForbiddenTarget;
+      case 'too_many_redirects':
+        return copy.errorTooManyRedirects;
+      case 'timeout':
+        return copy.errorTimeout;
+      case 'fetch_failed':
+        return copy.errorFetchFailed;
+      case 'rate_limit':
+        return copy.errorRateLimit;
+      case 'url_too_long':
+        return copy.urlTooLong;
+      case 'missing_url':
+        return copy.emptyInput;
+      default:
+        return `${copy.errorGeneric} (${err.error})`;
+    }
+  };
+
+  const initOne = (root: HTMLElement): void => {
+    let copy: Copy;
+    try {
+      copy = JSON.parse(root.dataset.copy || '{}') as Copy;
+    } catch {
+      return;
+    }
+    const sample = root.dataset.sample || '';
+    const endpoint = root.dataset.endpoint || '/api/unshorten';
+
+    const input = root.querySelector<HTMLInputElement>('[data-url-input]');
+    const analyzeBtn = root.querySelector<HTMLButtonElement>('[data-analyze-btn]');
+    const pasteBtn = root.querySelector<HTMLButtonElement>('[data-paste-btn]');
+    const sampleBtn = root.querySelector<HTMLButtonElement>('[data-sample-btn]');
+    const clearBtn = root.querySelector<HTMLButtonElement>('[data-clear-btn]');
+    const errorEl = root.querySelector<HTMLElement>('[data-error]');
+    const resultEl = root.querySelector<HTMLElement>('[data-result]');
+    const summaryEl = root.querySelector<HTMLElement>('[data-summary]');
+    const hopsList = root.querySelector<HTMLElement>('[data-hops-list]');
+    const finalCard = root.querySelector<HTMLElement>('[data-final-card]');
+
+    if (
+      !input ||
+      !analyzeBtn ||
+      !pasteBtn ||
+      !sampleBtn ||
+      !clearBtn ||
+      !errorEl ||
+      !resultEl ||
+      !summaryEl ||
+      !hopsList ||
+      !finalCard
+    ) {
+      return;
+    }
+
+    const showError = (msg: string): void => {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+    };
+    const clearError = (): void => {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    };
+
+    const renderSummary = (resp: SuccessResponse): void => {
+      summaryEl.innerHTML = '';
+      const items: Array<{ label: string; color: string }> = [
+        {
+          label: copy.summaryRedirects.replace(
+            '{N}',
+            String(resp.redirectCount),
+          ),
+          color: 'text-gray-300 border-gray-700',
+        },
+        {
+          label: copy.summaryFinalHost.replace('{HOST}', resp.finalHostname),
+          color: 'text-emerald-300 border-emerald-500/40 bg-emerald-500/5',
+        },
+      ];
+      for (const item of items) {
+        const div = document.createElement('div');
+        div.className = `border ${item.color} rounded-md px-3 py-2 text-xs font-mono text-center break-all`;
+        div.textContent = item.label;
+        summaryEl.appendChild(div);
+      }
+
+      if (resp.truncated) {
+        const warn = document.createElement('div');
+        warn.className =
+          'sm:col-span-2 border border-yellow-500/40 bg-yellow-500/5 text-yellow-300 rounded-md px-3 py-2 text-xs text-center';
+        warn.textContent = copy.summaryTruncated;
+        summaryEl.appendChild(warn);
+      }
+    };
+
+    const renderHops = (resp: SuccessResponse): void => {
+      hopsList.innerHTML = '';
+      let prevRegistrable: string | null = null;
+
+      resp.hops.forEach((hop, i) => {
+        const li = document.createElement('li');
+        const isLast = i === resp.hops.length - 1;
+        const isRedirect = hop.status >= 300 && hop.status < 400;
+        const isError = hop.status >= 400;
+
+        const currReg = registrableDomain(hop.hostname);
+        const changed = prevRegistrable !== null && prevRegistrable !== currReg;
+
+        let borderClass: string;
+        let badgeClass: string;
+        let badgeText: string;
+        if (isError) {
+          borderClass = 'border-red-500/40 bg-red-500/5';
+          badgeClass = 'bg-red-500/20 text-red-300';
+          badgeText = copy.hopBadgeError;
+        } else if (isLast) {
+          borderClass = 'border-emerald-500/40 bg-emerald-500/5';
+          badgeClass = 'bg-emerald-500/20 text-emerald-300';
+          badgeText = copy.hopBadgeFinal;
+        } else if (isRedirect) {
+          borderClass = changed
+            ? 'border-red-500/60 bg-red-500/10'
+            : 'border-gray-700 bg-gray-900/50';
+          badgeClass = 'bg-purple-500/20 text-purple-300';
+          badgeText = copy.hopBadgeRedirect;
+        } else {
+          borderClass = 'border-gray-700 bg-gray-900/50';
+          badgeClass = 'bg-gray-700/40 text-gray-300';
+          badgeText = String(hop.status);
+        }
+
+        li.className = `border ${borderClass} rounded-md px-3 py-3`;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center gap-2 mb-1';
+
+        const idx = document.createElement('span');
+        idx.className =
+          'text-[10px] text-gray-500 font-mono w-6 text-right';
+        idx.textContent = `#${hop.hopIndex}`;
+        header.appendChild(idx);
+
+        const badge = document.createElement('span');
+        badge.className = `text-[10px] px-2 py-0.5 rounded font-bold tracking-wider ${badgeClass}`;
+        badge.textContent = badgeText;
+        header.appendChild(badge);
+
+        const status = document.createElement('span');
+        status.className = 'text-xs text-gray-400 font-mono';
+        status.textContent = String(hop.status);
+        header.appendChild(status);
+
+        const hostSpan = document.createElement('span');
+        const hostColor = changed
+          ? 'text-red-300 font-bold'
+          : 'text-white';
+        hostSpan.className = `text-sm font-mono break-all ${hostColor}`;
+        hostSpan.textContent = hop.hostname;
+        header.appendChild(hostSpan);
+
+        if (changed) {
+          const tag = document.createElement('span');
+          tag.className =
+            'text-[10px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-200 font-semibold whitespace-nowrap';
+          tag.textContent = copy.hopDomainChange;
+          header.appendChild(tag);
+        }
+
+        li.appendChild(header);
+
+        // URL（最大幅で折り返し）
+        const urlRow = document.createElement('div');
+        urlRow.className =
+          'text-[11px] text-gray-500 font-mono break-all pl-8';
+        urlRow.textContent = hop.url;
+        li.appendChild(urlRow);
+
+        hopsList.appendChild(li);
+        prevRegistrable = currReg;
+      });
+    };
+
+    const renderFinalCard = (resp: SuccessResponse): void => {
+      finalCard.innerHTML = '';
+
+      const rowDomain = document.createElement('div');
+      rowDomain.className = 'flex flex-wrap items-baseline gap-2 mb-2';
+      const labelD = document.createElement('span');
+      labelD.className =
+        'text-xs text-emerald-400 uppercase tracking-wider';
+      labelD.textContent = copy.finalDomain;
+      const valD = document.createElement('span');
+      valD.className = 'text-base text-white font-mono font-bold break-all';
+      valD.textContent = resp.finalHostname;
+      rowDomain.appendChild(labelD);
+      rowDomain.appendChild(valD);
+      finalCard.appendChild(rowDomain);
+
+      const rowCount = document.createElement('div');
+      rowCount.className = 'flex flex-wrap items-baseline gap-2 mb-3';
+      const labelC = document.createElement('span');
+      labelC.className = 'text-xs text-emerald-400 uppercase tracking-wider';
+      labelC.textContent = copy.finalRedirectCount;
+      const valC = document.createElement('span');
+      valC.className = 'text-sm text-gray-200 font-mono';
+      valC.textContent = String(resp.redirectCount);
+      rowCount.appendChild(labelC);
+      rowCount.appendChild(valC);
+      finalCard.appendChild(rowCount);
+
+      const urlRow = document.createElement('div');
+      urlRow.className =
+        'text-xs text-gray-400 font-mono break-all border-t border-emerald-500/20 pt-3 mb-3';
+      urlRow.textContent = resp.finalUrl;
+      finalCard.appendChild(urlRow);
+
+      const warn = document.createElement('p');
+      warn.className = 'text-xs text-yellow-300 mb-3';
+      warn.textContent = copy.openWarning;
+      finalCard.appendChild(warn);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex flex-wrap gap-2';
+
+      const openLink = document.createElement('a');
+      openLink.href = resp.finalUrl;
+      openLink.target = '_blank';
+      openLink.rel = 'noopener noreferrer nofollow';
+      openLink.className =
+        'inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/60 text-emerald-200 text-xs font-semibold transition-colors';
+      openLink.textContent = copy.openLink;
+      actions.appendChild(openLink);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className =
+        'inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 text-xs transition-colors';
+      copyBtn.textContent = copy.copyLink;
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(resp.finalUrl);
+          const orig = copy.copyLink;
+          copyBtn.textContent = copy.copied;
+          window.setTimeout(() => {
+            copyBtn.textContent = orig;
+          }, 1500);
+        } catch {
+          /* 失敗時は何もしない（権限拒否など） */
+        }
+      });
+      actions.appendChild(copyBtn);
+
+      finalCard.appendChild(actions);
+    };
+
+    const analyze = async (): Promise<void> => {
+      clearError();
+      const raw = input.value.trim();
+      if (raw === '') {
+        showError(copy.emptyInput);
+        resultEl.classList.add('hidden');
+        return;
+      }
+      if (raw.length > 2048) {
+        showError(copy.urlTooLong);
+        return;
+      }
+      // クライアント側でも軽くチェック（http/https 必須）
+      let parsed: URL;
+      try {
+        parsed = new URL(raw);
+      } catch {
+        showError(copy.invalidUrl);
+        return;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        showError(copy.errorInvalidScheme);
+        return;
+      }
+
+      analyzeBtn.disabled = true;
+      const origLabel = analyzeBtn.textContent;
+      analyzeBtn.textContent = copy.analyzing;
+      resultEl.classList.add('hidden');
+
+      try {
+        const url = `${endpoint}?url=${encodeURIComponent(raw)}`;
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+
+        let data: Response_;
+        try {
+          data = (await res.json()) as Response_;
+        } catch {
+          showError(copy.errorFetchFailed);
+          return;
+        }
+
+        if (!data.ok) {
+          showError(`${copy.errorPrefix}: ${errorMessage(data, copy)}`);
+          return;
+        }
+
+        renderSummary(data);
+        renderHops(data);
+        renderFinalCard(data);
+        resultEl.classList.remove('hidden');
+      } catch {
+        showError(copy.errorFetchFailed);
+      } finally {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = origLabel;
+      }
+    };
+
+    analyzeBtn.addEventListener('click', () => {
+      void analyze();
+    });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        void analyze();
+      }
+    });
+    sampleBtn.addEventListener('click', () => {
+      input.value = sample;
+      clearError();
+      void analyze();
+    });
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      clearError();
+      resultEl.classList.add('hidden');
+    });
+    pasteBtn.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        input.value = text.trim();
+        clearError();
+      } catch {
+        showError(copy.clipboardError);
+      }
+    });
+  };
+
+  const init = (): void => {
+    document
+      .querySelectorAll<HTMLElement>('[data-url-unshortener]')
+      .forEach(initOne);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+</script>

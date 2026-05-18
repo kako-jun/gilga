@@ -19,4 +19,11 @@ export default defineConfig({
   redirects: {
     '/': '/ja/',
   },
+  vite: {
+    server: {
+      proxy: {
+        '/api': 'http://localhost:8787',
+      },
+    },
+  },
 });
