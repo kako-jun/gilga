@@ -18,6 +18,8 @@
 export interface Env {
   // 環境変数が必要になったらここに足す。今は無し。
   ALLOWED_ORIGINS?: string;
+  // Cloudflare Rate Limiting binding。local dev では undefined。
+  RATE_LIMITER?: { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
 }
 
 type HopRecord = {
@@ -45,6 +47,7 @@ type ErrorCode =
   | 'timeout'
   | 'rate_limit'
   | 'forbidden_target'
+  | 'forbidden_origin'
   | 'url_too_long'
   | 'method_not_allowed'
   | 'missing_url'
@@ -120,21 +123,42 @@ function errorResponse(
 
 /** localhost / private IPv4 / IPv6 link-local の判定。SSRF 対策。 */
 function isForbiddenHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
+  let h = hostname.toLowerCase();
+
+  // 末尾ドット (FQDN root) を剥がす。`example.com.` を `example.com` 同様に扱う。
+  // 連続した末尾ドットもケアする (`example.com..` 等)。
+  h = h.replace(/\.+$/, '');
 
   // 明示的に危険なホスト名
-  if (h === 'localhost') return true;
+  if (h === '' || h === 'localhost') return true;
   if (h.endsWith('.localhost')) return true;
   if (h.endsWith('.local')) return true; // mDNS
   if (h.endsWith('.internal')) return true;
 
   // IPv6 のブラケット表記
   if (h.startsWith('[') && h.endsWith(']')) {
-    const inner = h.slice(1, -1);
-    // ::1, fe80::, fc00::/7
-    if (inner === '::1' || inner === '::') return true;
+    let inner = h.slice(1, -1);
+
+    // IPv6 zone-id 除去 (`fe80::1%eth0` 等)
+    const pctIdx = inner.indexOf('%');
+    if (pctIdx >= 0) inner = inner.slice(0, pctIdx);
+
+    // 正規化された ::1 検出 (0:0:0:0:0:0:0:1 等)
+    const normalized = normalizeIPv6(inner);
+
+    if (inner === '::1' || inner === '::' || normalized === '::1' || normalized === '::') {
+      return true;
+    }
     if (inner.startsWith('fe80:') || inner.startsWith('fe80::')) return true;
-    if (inner.startsWith('fc') || inner.startsWith('fd')) return true;
+    // fc00::/7 (Unique Local Address: fc00:: 〜 fdff::)
+    if (/^fc[0-9a-f]{0,2}:/.test(inner) || /^fd[0-9a-f]{0,2}:/.test(inner)) return true;
+
+    // IPv4-mapped IPv6: [::ffff:127.0.0.1] や [::ffff:0:127.0.0.1]
+    const mappedMatch = /^::ffff:(?:0:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(inner);
+    if (mappedMatch) {
+      return isForbiddenHostname(mappedMatch[1]);
+    }
+
     return false;
   }
 
@@ -166,6 +190,25 @@ function isForbiddenHostname(hostname: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * IPv6 アドレスを `::` 圧縮表記に正規化する（簡易版）。
+ * `0:0:0:0:0:0:0:1` → `::1` 等。完璧ではないが、loopback / unspecified 判定用。
+ */
+function normalizeIPv6(addr: string): string {
+  // すでに `::` 圧縮を含むものはそのまま返す
+  if (addr.includes('::')) return addr;
+  const parts = addr.split(':');
+  if (parts.length !== 8) return addr;
+  // 各セグメントを 16 進数として正規化（先頭 0 剥がし）
+  const ints = parts.map((p) => parseInt(p, 16));
+  if (ints.some((n) => Number.isNaN(n))) return addr;
+  // 全て 0 → '::'
+  if (ints.every((n) => n === 0)) return '::';
+  // 末尾だけ 1、他は 0 → '::1'
+  if (ints.slice(0, 7).every((n) => n === 0) && ints[7] === 1) return '::1';
+  return addr;
 }
 
 /** URL パース + scheme / 長さ / SSRF チェック。問題ない URL を返す。 */
@@ -294,11 +337,16 @@ async function followRedirects(
       // body はすぐ捨てる
       await discardBody(res);
 
+      // 認証情報 (user:pass@) はレスポンスから除去する。プライバシー・ログ事故対策。
+      const sanitized = new URL(currentUrl.toString());
+      sanitized.username = '';
+      sanitized.password = '';
+
       const hop: HopRecord = {
-        url: currentUrl.toString(),
+        url: sanitized.toString(),
         status,
         hopIndex: i,
-        hostname: currentUrl.hostname,
+        hostname: sanitized.hostname,
       };
       if (location) hop.location = location;
       hops.push(hop);
@@ -424,6 +472,41 @@ export default {
       );
     }
 
+    // CORS: API は Origin が無い呼び出し (curl, server-side, 他オリジン) を弾く。
+    const origin = req.headers.get('Origin');
+    const allowedOrigin = resolveCorsOrigin(req, env);
+    if (!origin || !allowedOrigin) {
+      return errorResponse(
+        'forbidden_origin',
+        'API must be called from an allowed origin',
+        403,
+        req,
+        env,
+      );
+    }
+
+    // レート制限: IP ベース。binding 未設定の local dev ではスキップ。
+    const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+    if (env.RATE_LIMITER) {
+      try {
+        const { success } = await env.RATE_LIMITER.limit({ key: ip });
+        if (!success) {
+          return errorResponse(
+            'rate_limit',
+            'Too many requests, try again later',
+            429,
+            req,
+            env,
+          );
+        }
+      } catch (err) {
+        // binding はあるが何か壊れた場合は通す（fail-open）。ログだけ残す。
+        console.warn(
+          `[unshorten] rate limiter error ip=${ip} err=${err instanceof Error ? err.name : 'unknown'}`,
+        );
+      }
+    }
+
     const rawUrl = url.searchParams.get('url');
     if (!rawUrl) {
       return errorResponse(
@@ -480,6 +563,8 @@ function statusForError(code: ErrorCode): number {
     case 'missing_url':
     case 'forbidden_target':
       return 400;
+    case 'forbidden_origin':
+      return 403;
     case 'url_too_long':
       return 413;
     case 'too_many_redirects':
